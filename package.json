@@ -1,6 +1,6 @@
 {
   "name": "engramport",
-  "version": "2.0.0",
+  "version": "2.0.2",
   "description": "Give any AI agent persistent memory. MCP-native, bring-your-own-LLM, MandelDB-backed.",
   "homepage": "https://engramport.com",
   "repository": {

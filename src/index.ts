@@ -51,7 +51,7 @@ validateConfig();
 // ═══════════════════════════════════════════════════════════
 
 const mcpServer = new Server(
-  { name: "engramport", version: "2.0.0" },
+  { name: "engramport", version: "2.0.2" },
   { capabilities: { tools: {} } },
 );
 
@@ -77,7 +77,7 @@ function startHTTP() {
   app.get("/health", (_req: Request, res: Response) => {
     res.json({
       service: "engramport",
-      version: "2.0.0",
+      version: "2.0.2",
       eidetic_api: config.apiUrl,
       namespace: config.namespace,
       tools: toolDefinitions.length,
@@ -151,9 +151,13 @@ function startHTTP() {
   });
 
   app.listen(config.port, "0.0.0.0", () => {
-    console.log(`
+    // Banner to STDERR unconditionally. stdout is reserved for protocol output
+    // (JSON-RPC when MCP clients connect to /mcp). 2.0.0 used console.log here
+    // and broke Claude Desktop's stdio MCP integration when users following
+    // documented install steps got auto-defaulted to http mode.
+    console.error(`
 ┌──────────────────────────────────────────────────────┐
-│              ENGRAMPORT v2.0.0                       │
+│              ENGRAMPORT v2.0.2                       │
 │              Give any bot a brain.                   │
 ├──────────────────────────────────────────────────────┤
 │  Eidetic API:  ${config.apiUrl.padEnd(37)}│

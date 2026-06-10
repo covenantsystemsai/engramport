@@ -18,8 +18,17 @@ export const config = {
   /** HTTP server port (for HTTP/SSE mode) */
   port: parseInt(process.env.ENGRAMPORT_PORT || "3001"),
 
-  /** Transport mode: stdio | http */
-  mode: (process.env.ENGRAMPORT_MODE || "http") as "stdio" | "http",
+  /**
+   * Transport mode: stdio | http.
+   *
+   * Auto-detect: if stdout is not a TTY (e.g., spawned by Claude Desktop or
+   * any MCP client via child_process.spawn), default to stdio. Interactive
+   * terminals default to http for the REST/SSE surface. Explicit env var
+   * always wins. Without auto-detect, MCP clients hit port 3001 conflicts
+   * and the startup banner corrupts JSON-RPC stdin — the 2.0.0 launch bug.
+   */
+  mode: (process.env.ENGRAMPORT_MODE ||
+    (process.stdout.isTTY ? "http" : "stdio")) as "stdio" | "http",
 
   // ── Cloud Run OIDC auth (see src/auth.ts for full rationale) ──────────────
   // These are read directly by auth.ts at module load; documented here for visibility.

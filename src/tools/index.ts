@@ -20,7 +20,7 @@ export const toolDefinitions = [
   {
     name: "remember",
     description:
-      "Store a memory in the brain. Memories are automatically linked to similar existing memories. " +
+      "Persist a memory so it survives across sessions and tools. Call this PROACTIVELY whenever something is worth keeping — a decision made, a fact the user states, a conclusion you reach, a preference expressed. Don't wait to be asked: storing as you go is what lets any future session (yours or another agent's) continue without re-learning. Auto-linked into the knowledge graph. " +
       "Types: memory (facts/data), insight (patterns/observations), principle (core truths), hypothesis (unverified ideas).",
     inputSchema: {
       type: "object" as const,
@@ -49,8 +49,8 @@ export const toolDefinitions = [
   {
     name: "recall",
     description:
-      "Search the brain for memories similar to a query. Returns the most relevant memories " +
-      "with similarity scores, plus graph-connected context.",
+      "Search the brain BEFORE acting on anything that may depend on prior context. Call this FIRST when the user references past work, when continuity matters, or before answering from assumption — the brain may already hold the decision, preference, or fact you need. Returns the most relevant memories " +
+      "with similarity scores, plus graph-connected neighbors (context a flat search misses). Recall first; don't start from a blank slate.",
     inputSchema: {
       type: "object" as const,
       properties: {

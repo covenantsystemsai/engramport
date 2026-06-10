@@ -1,8 +1,8 @@
 # EngramPort
 
-**Give any AI agent persistent memory.** MCP-native, bring-your-own-LLM, MandelDB-backed.
+**Give any AI agent persistent memory.** MCP-native, bring-your-own-LLM (any model via OpenRouter), graph-RAG.
 
-[engramport.com](https://engramport.com) · [Docs](https://engramport.com/docs) · [Pricing](https://engramport.com/pricing) · [npm](https://www.npmjs.com/package/engramport)
+[engramport.com](https://engramport.com) · [Docs](https://engramport.com/docs) · [Pricing](https://engramport.com/#pricing) · [npm](https://www.npmjs.com/package/engramport)
 
 EngramPort is the persistent-memory layer for AI agents. Your bot remembers across sessions, recalls by meaning, and synthesizes higher-order insights from the patterns in what it has seen. Built on the [Model Context Protocol](https://modelcontextprotocol.io), it plugs into Claude Desktop, Cursor, Cline, the OpenAI Agents SDK, or any MCP-aware client with three lines of config.
 
@@ -46,13 +46,14 @@ Seven MCP tools, mapped 1:1 to a graph-RAG memory substrate:
 
 ## Bring your own LLM
 
-EngramPort does not resell LLM calls. You pay for vector storage, embeddings, and the MCP transport on a flat tier; the LLM bill goes to your provider directly. Three providers supported at v2:
+EngramPort does not resell LLM calls. You pay for vector storage, embeddings, and the MCP transport on a flat tier; the LLM bill goes to your provider directly. Three providers natively, plus virtually any model (DeepSeek, Mistral, Llama, Qwen, and more) through OpenRouter:
 
 | Provider | Set `LLM_PROVIDER` to | Suggested fast / balanced / intense models |
 |---|---|---|
 | Anthropic | `anthropic` | `claude-haiku-4-5-20251001` / `claude-sonnet-4-6` / `claude-opus-4-7` |
 | OpenAI | `openai` | `gpt-4.1-nano` / `gpt-4.1-mini` / `gpt-4.1` |
 | Google | `google` | `gemini-2.0-flash` / `gemini-1.5-pro` / `gemini-1.5-pro` |
+| OpenRouter | `openrouter` | any OpenRouter slug, e.g. `openai/gpt-4o-mini` / `openai/gpt-4o` / `anthropic/claude-3.5-sonnet` |
 
 Defaults flip automatically based on your `LLM_API_KEY` prefix. Override any tier via env (`FAST_MODEL`, `BALANCED_MODEL`, `INTENSE_MODEL`) or in your dashboard at [engramport.com/dashboard](https://engramport.com/dashboard).
 
@@ -60,7 +61,7 @@ Defaults flip automatically based on your `LLM_API_KEY` prefix. Override any tie
 
 Most memory layers stop at vector similarity. EngramPort builds a typed graph on top: every memory you store is auto-linked to its semantic neighbors, and the `groom` and `dream` passes promote dense clusters into named insights and principles. Recall returns direct vector matches AND graph-expanded context. The result is responses grounded in the patterns across your memories, not just the nearest paragraph.
 
-The underlying substrate is [MandelDB](https://engramport.com/docs/architecture), a graph-RAG engine running on Pinecone for vectors and Supabase Postgres for the graph layer. EngramPort is the MCP wrapper that exposes the substrate to any agent.
+The underlying substrate is [Eidetic](https://engramport.com/docs/architecture), a graph-RAG engine running on Pinecone for vectors and Supabase Postgres for the graph layer. EngramPort is the MCP wrapper that exposes the substrate to any agent.
 
 ## Quickstart
 

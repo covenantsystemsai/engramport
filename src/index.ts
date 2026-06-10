@@ -51,7 +51,7 @@ validateConfig();
 // ═══════════════════════════════════════════════════════════
 
 const mcpServer = new Server(
-  { name: "engramport", version: "2.0.2" },
+  { name: "engramport", version: "2.0.3" },
   { capabilities: { tools: {} } },
 );
 
@@ -77,7 +77,7 @@ function startHTTP() {
   app.get("/health", (_req: Request, res: Response) => {
     res.json({
       service: "engramport",
-      version: "2.0.2",
+      version: "2.0.3",
       eidetic_api: config.apiUrl,
       namespace: config.namespace,
       tools: toolDefinitions.length,
@@ -157,7 +157,7 @@ function startHTTP() {
     // documented install steps got auto-defaulted to http mode.
     console.error(`
 ┌──────────────────────────────────────────────────────┐
-│              ENGRAMPORT v2.0.2                       │
+│              ENGRAMPORT v2.0.3                       │
 │              Give any bot a brain.                   │
 ├──────────────────────────────────────────────────────┤
 │  Eidetic API:  ${config.apiUrl.padEnd(37)}│

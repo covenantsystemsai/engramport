@@ -32,7 +32,7 @@ Restart your client. Your agent now has memory.
 
 ## What you get
 
-Seven MCP tools, mapped 1:1 to a graph-RAG memory substrate:
+Twelve MCP tools, mapped 1:1 to a graph-RAG memory substrate:
 
 | Tool | What it does |
 |---|---|
@@ -43,6 +43,44 @@ Seven MCP tools, mapped 1:1 to a graph-RAG memory substrate:
 | `groom` | Auto-discover typed edges between memories: `supports`, `contradicts`, `synthesizes`, and more. |
 | `dream` | Cluster analysis. Brain reads connected memories and produces higher-order INSIGHT and PRINCIPLE nodes. |
 | `inspect` | Brain vitals: memory count, edge count, Graph Quality Index. |
+| `fetch_memory` | Read one memory by ID. Returns its content, type, provenance hash, metadata, and linked neighbors. |
+| `delete_memory` | Remove one memory by ID. The vector and its graph edges go with it. |
+| `list_namespaces` | List every namespace this key can reach, each with its memory count. |
+| `export_graph` | Export a namespace's graph: every node and every typed edge between them. |
+
+### remember parameters
+
+| Param | Type | Default | What it does |
+|---|---|---|---|
+| `content` | string | required | The text to store. |
+| `type` | string | `memory` | Node type: `memory`, `insight`, `principle`, `hypothesis`. |
+| `namespace` | string | your default | Which brain to write to. |
+| `metadata` | object | `{}` | Arbitrary key/value pairs to attach. |
+| `dedup_key` | string | none | Idempotency key. When set, the memory's identity is `namespace + dedup_key` rather than `namespace + content`. Two items with identical content no longer collide, and re-writing the same key updates that memory in place. Use it when you want a stable handle on a record you may revise. |
+| `source_url` | string | none | Records where the memory came from. |
+| `auto_link` | boolean | `true` | Auto-link the new memory to its semantic neighbors in the graph. |
+
+### recall parameters
+
+| Param | Type | Default | What it does |
+|---|---|---|---|
+| `query` | string | required | What to search for, by meaning. |
+| `top_k` | number | `5` | How many matches to return (1 to 20). |
+| `namespace` | string | your default | Which brain to search. |
+| `node_type_filter` | string | none | Restrict to one node type: `memory`, `insight`, or `principle`. |
+| `min_score` | number | `0` | Drop matches below this similarity score (0 to 1). |
+| `source_filter` | string | none | Restrict to one source, such as `gmail`, `slack`, or `gdrive`. |
+| `date_from` | ISO string | none | Only memories created on or after this date. |
+| `date_to` | ISO string | none | Only memories created on or before this date. |
+
+### Graph and namespace tools
+
+| Tool | Params | Returns |
+|---|---|---|
+| `fetch_memory` | `memory_id`, `namespace` | The full stored record for one memory. |
+| `delete_memory` | `memory_id`, `namespace` | Confirmation that the memory and its edges are gone. |
+| `list_namespaces` | none | Every reachable namespace with its memory count. |
+| `export_graph` | `namespace` | Nodes and typed edges for the namespace. |
 
 ## Bring your own LLM
 

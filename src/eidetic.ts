@@ -37,31 +37,54 @@ async function request(method: string, path: string, body?: unknown): Promise<un
 
 // ── Memory Operations ─────────────────────────────────────
 
+export interface RememberOptions {
+  dedupKey?: string;
+  sourceUrl?: string;
+  autoLink?: boolean;
+}
+
 export async function remember(
   content: string,
   namespace: string,
   nodeType: string = "memory",
   metadata: Record<string, unknown> = {},
+  options: RememberOptions = {},
 ): Promise<unknown> {
   return request("POST", "/v2/memory", {
     content,
     namespace,
     node_type: nodeType,
     metadata,
-    auto_link: true,
+    auto_link: options.autoLink ?? true,
+    dedup_key: options.dedupKey ?? null,
+    source_url: options.sourceUrl ?? null,
   });
+}
+
+export interface RecallOptions {
+  nodeTypeFilter?: string;
+  minScore?: number;
+  sourceFilter?: string;
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 export async function recall(
   query: string,
   namespace: string,
   topK: number = 5,
+  options: RecallOptions = {},
 ): Promise<unknown> {
   return request("POST", "/v2/recall", {
     query,
     namespace,
     top_k: topK,
     include_context: true,
+    node_type_filter: options.nodeTypeFilter ?? null,
+    min_score: options.minScore ?? 0,
+    source_filter: options.sourceFilter ?? null,
+    date_from: options.dateFrom ?? null,
+    date_to: options.dateTo ?? null,
   });
 }
 
@@ -121,8 +144,16 @@ export async function graph(namespace: string): Promise<unknown> {
   return request("GET", `/v2/brain/graph?namespace=${encodeURIComponent(namespace)}`);
 }
 
+export async function fetchMemory(memoryId: string, namespace: string): Promise<unknown> {
+  return request("GET", `/v2/memory/${encodeURIComponent(memoryId)}?namespace=${encodeURIComponent(namespace)}`);
+}
+
 export async function deleteMemory(memoryId: string, namespace: string): Promise<unknown> {
-  return request("DELETE", `/v2/memory/${memoryId}?namespace=${encodeURIComponent(namespace)}`);
+  return request("DELETE", `/v2/memory/${encodeURIComponent(memoryId)}?namespace=${encodeURIComponent(namespace)}`);
+}
+
+export async function listNamespaces(): Promise<unknown> {
+  return request("GET", "/v2/namespaces");
 }
 
 export async function exportBrain(namespace: string): Promise<unknown> {

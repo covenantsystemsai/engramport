@@ -1,0 +1,49 @@
+name: publish
+
+# Publish to npm via OIDC Trusted Publishing — no tokens, no 2FA, no passkey.
+#
+# ONE-TIME npm setup (do this once on npmjs.com):
+#   Package "engramport" -> Settings -> Trusted Publisher
+#     Publisher:  GitHub Actions
+#     Repository: covenantsystemsai/engramport
+#     Workflow:   publish.yml
+#   (Leave Environment blank.) This is compatible with the
+#   "Require 2FA and disallow tokens" setting — OIDC is exempt.
+#
+# To release after that: bump the version, commit, then
+#   git tag v2.1.0 && git push origin v2.1.0
+# This workflow runs on that tag and publishes itself.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write   # REQUIRED: lets npm exchange the GitHub OIDC token for publish auth
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # Trusted Publishing (OIDC) requires npm >= 11.5.1; Node 22 ships npm 10.x.
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (tsc -> dist/)
+        run: npm run build
+
+      - name: Publish to npm (OIDC + provenance)
+        run: npm publish --provenance --access public

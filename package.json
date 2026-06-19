@@ -1,6 +1,6 @@
 {
   "name": "engramport",
-  "version": "2.0.3",
+  "version": "2.1.0",
   "description": "Give any AI agent persistent memory. MCP-native, bring-your-own-LLM (any model via OpenRouter), graph-RAG.",
   "homepage": "https://engramport.com",
   "repository": {

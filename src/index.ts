@@ -51,7 +51,7 @@ validateConfig();
 // ═══════════════════════════════════════════════════════════
 
 const mcpServer = new Server(
-  { name: "engramport", version: "2.0.3" },
+  { name: "engramport", version: "2.1.0" },
   { capabilities: { tools: {} } },
 );
 
@@ -77,7 +77,7 @@ function startHTTP() {
   app.get("/health", (_req: Request, res: Response) => {
     res.json({
       service: "engramport",
-      version: "2.0.3",
+      version: "2.1.0",
       eidetic_api: config.apiUrl,
       namespace: config.namespace,
       tools: toolDefinitions.length,
@@ -157,7 +157,7 @@ function startHTTP() {
     // documented install steps got auto-defaulted to http mode.
     console.error(`
 ┌──────────────────────────────────────────────────────┐
-│              ENGRAMPORT v2.0.3                       │
+│              ENGRAMPORT v2.1.0                       │
 │              Give any bot a brain.                   │
 ├──────────────────────────────────────────────────────┤
 │  Eidetic API:  ${config.apiUrl.padEnd(37)}│
@@ -165,13 +165,17 @@ function startHTTP() {
 │  Port:         ${String(config.port).padEnd(37)}│
 ├──────────────────────────────────────────────────────┤
 │  REST Endpoints (any bot):                           │
-│    POST /remember   — Store a memory                 │
-│    POST /recall     — Search by meaning              │
-│    POST /chat       — Talk to the brain              │
-│    POST /upload     — Ingest a document              │
-│    POST /groom      — Discover connections           │
-│    POST /dream      — Synthesize insights            │
-│    POST /inspect    — Brain stats                    │
+│    POST /remember        — Store a memory            │
+│    POST /recall          — Search by meaning         │
+│    POST /chat            — Talk to the brain         │
+│    POST /upload          — Ingest a document         │
+│    POST /groom           — Discover connections      │
+│    POST /dream           — Synthesize insights       │
+│    POST /inspect         — Brain stats               │
+│    POST /fetch_memory    — Read a memory by ID       │
+│    POST /delete_memory   — Remove a memory by ID     │
+│    POST /list_namespaces — List namespaces           │
+│    POST /export_graph    — Export the graph          │
 │                                                      │
 │  MCP (Claude/agents):                                │
 │    POST /mcp        — JSON-RPC 2.0                   │

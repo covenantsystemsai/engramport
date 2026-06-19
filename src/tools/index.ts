@@ -1,14 +1,18 @@
 /**
  * EngramPort — MCP Tool Definitions
  *
- * 7 tools that give any bot a complete brain:
- *   remember  — Store a memory
- *   recall    — Search memories by meaning
- *   chat      — Talk to the brain (RAG)
- *   upload    — Ingest a document
- *   groom     — Auto-discover connections
- *   dream     — Synthesize new insights
- *   inspect   — Check brain stats
+ * 12 tools that give any bot a complete brain:
+ *   remember        — Store a memory
+ *   recall          — Search memories by meaning
+ *   chat            — Talk to the brain (RAG)
+ *   upload          — Ingest a document
+ *   groom           — Auto-discover connections
+ *   dream           — Synthesize new insights
+ *   inspect         — Check brain stats
+ *   fetch_memory    — Read one memory by ID
+ *   delete_memory   — Remove a memory by ID
+ *   list_namespaces — List accessible namespaces
+ *   export_graph    — Export the knowledge graph (nodes + edges)
  */
 
 import { config } from "../config.js";
@@ -42,6 +46,19 @@ export const toolDefinitions = [
           type: "object",
           description: "Optional metadata to attach",
         },
+        dedup_key: {
+          type: "string",
+          description:
+            "Optional idempotency key. When set, the memory's identity becomes namespace+dedup_key instead of namespace+content. Two items with identical content no longer collide, and re-writing the same key updates the existing memory in place. Use it when you want a stable handle on a memory you may revise.",
+        },
+        source_url: {
+          type: "string",
+          description: "Optional source URL to record where this memory came from",
+        },
+        auto_link: {
+          type: "boolean",
+          description: "Auto-link this memory to its semantic neighbors in the graph (default: true)",
+        },
       },
       required: ["content"],
     },
@@ -65,6 +82,27 @@ export const toolDefinitions = [
         namespace: {
           type: "string",
           description: `Brain namespace (default: ${config.namespace})`,
+        },
+        node_type_filter: {
+          type: "string",
+          enum: ["memory", "insight", "principle", "hypothesis"],
+          description: "Restrict results to one node type",
+        },
+        min_score: {
+          type: "number",
+          description: "Drop matches below this similarity score (0-1)",
+        },
+        source_filter: {
+          type: "string",
+          description: "Restrict results to one source (e.g. gmail, slack, gdrive)",
+        },
+        date_from: {
+          type: "string",
+          description: "Only return memories created on or after this ISO date",
+        },
+        date_to: {
+          type: "string",
+          description: "Only return memories created on or before this ISO date",
         },
       },
       required: ["query"],
@@ -178,6 +216,74 @@ export const toolDefinitions = [
       required: [],
     },
   },
+  {
+    name: "fetch_memory",
+    description:
+      "Read one memory by its ID. Returns the full content, node type, provenance hash, " +
+      "metadata, and the IDs of its graph-linked neighbors. Use it when you already hold " +
+      "a memory_id (from a recall result or an earlier write) and want the exact stored record.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        memory_id: {
+          type: "string",
+          description: "ID of the memory to fetch",
+        },
+        namespace: {
+          type: "string",
+          description: `Brain namespace (default: ${config.namespace})`,
+        },
+      },
+      required: ["memory_id"],
+    },
+  },
+  {
+    name: "delete_memory",
+    description:
+      "Remove one memory by its ID. The vector and its graph edges go with it. " +
+      "Use it to retract something stored in error or to prune stale records.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        memory_id: {
+          type: "string",
+          description: "ID of the memory to delete",
+        },
+        namespace: {
+          type: "string",
+          description: `Brain namespace (default: ${config.namespace})`,
+        },
+      },
+      required: ["memory_id"],
+    },
+  },
+  {
+    name: "list_namespaces",
+    description:
+      "List every namespace this key can reach, each with its memory count. Use it to " +
+      "discover which brains exist before you read from or write to one.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "export_graph",
+    description:
+      "Export the knowledge graph for a namespace: every node (memory, insight, principle) " +
+      "and every typed edge between them. Use it to visualize the graph or back up its structure.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        namespace: {
+          type: "string",
+          description: `Brain namespace (default: ${config.namespace})`,
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ── Tool Executor ─────────────────────────────────────────
@@ -198,6 +304,11 @@ export async function executeTool(
           ns,
           (args.type as string) || "memory",
           (args.metadata as Record<string, unknown>) || {},
+          {
+            dedupKey: args.dedup_key as string | undefined,
+            sourceUrl: args.source_url as string | undefined,
+            autoLink: args.auto_link as boolean | undefined,
+          },
         );
         break;
 
@@ -206,6 +317,13 @@ export async function executeTool(
           args.query as string,
           ns,
           (args.top_k as number) || 5,
+          {
+            nodeTypeFilter: args.node_type_filter as string | undefined,
+            minScore: args.min_score as number | undefined,
+            sourceFilter: args.source_filter as string | undefined,
+            dateFrom: args.date_from as string | undefined,
+            dateTo: args.date_to as string | undefined,
+          },
         );
         break;
 
@@ -236,6 +354,22 @@ export async function executeTool(
 
       case "inspect":
         result = await eidetic.inspect(ns);
+        break;
+
+      case "fetch_memory":
+        result = await eidetic.fetchMemory(args.memory_id as string, ns);
+        break;
+
+      case "delete_memory":
+        result = await eidetic.deleteMemory(args.memory_id as string, ns);
+        break;
+
+      case "list_namespaces":
+        result = await eidetic.listNamespaces();
+        break;
+
+      case "export_graph":
+        result = await eidetic.graph(ns);
         break;
 
       default:

@@ -50,8 +50,12 @@ validateConfig();
 // MCP Server (shared between stdio and HTTP)
 // ═══════════════════════════════════════════════════════════
 
+// Single-source the version so the three previously-hardcoded copies can't drift
+// from package.json again. Bump alongside package.json on release.
+const VERSION = "2.2.0";
+
 const mcpServer = new Server(
-  { name: "engramport", version: "2.1.0" },
+  { name: "engramport", version: VERSION },
   { capabilities: { tools: {} } },
 );
 
@@ -69,6 +73,11 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
 // ═══════════════════════════════════════════════════════════
 
 function startHTTP() {
+  // A single malformed request or async handler rejection must not take the whole
+  // process down (Express 4 does not catch async throws). Log and stay up.
+  process.on("unhandledRejection", (reason) => console.error("[engramport] unhandledRejection:", reason));
+  process.on("uncaughtException", (err) => console.error("[engramport] uncaughtException:", err));
+
   const app = express();
   app.use(cors());
   app.use(express.json({ limit: "10mb" }));
@@ -77,7 +86,7 @@ function startHTTP() {
   app.get("/health", (_req: Request, res: Response) => {
     res.json({
       service: "engramport",
-      version: "2.1.0",
+      version: VERSION,
       eidetic_api: config.apiUrl,
       namespace: config.namespace,
       tools: toolDefinitions.length,
@@ -106,6 +115,16 @@ function startHTTP() {
   // ── MCP JSON-RPC: POST /mcp ──
   // For MCP-aware clients that speak JSON-RPC 2.0.
   app.post("/mcp", async (req: Request, res: Response) => {
+    // Guard a bodyless / non-JSON POST: without this the destructure throws a
+    // TypeError in an async Express-4 handler -> unhandled rejection -> process exit.
+    if (!req.body || typeof req.body !== "object") {
+      res.status(400).json({
+        jsonrpc: "2.0",
+        error: { code: -32700, message: "Parse error: a JSON body is required (set Content-Type: application/json)" },
+        id: null,
+      });
+      return;
+    }
     const { jsonrpc, method, params, id } = req.body;
 
     if (jsonrpc !== "2.0") {
@@ -157,7 +176,7 @@ function startHTTP() {
     // documented install steps got auto-defaulted to http mode.
     console.error(`
 ┌──────────────────────────────────────────────────────┐
-│              ENGRAMPORT v2.1.0                       │
+│              ENGRAMPORT v2.2.0                       │
 │              Give any bot a brain.                   │
 ├──────────────────────────────────────────────────────┤
 │  Eidetic API:  ${config.apiUrl.padEnd(37)}│

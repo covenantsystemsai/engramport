@@ -52,7 +52,7 @@ validateConfig();
 
 // Single-source the version so the three previously-hardcoded copies can't drift
 // from package.json again. Bump alongside package.json on release.
-const VERSION = "2.2.0";
+const VERSION = "2.2.1";
 
 const mcpServer = new Server(
   { name: "engramport", version: VERSION },
@@ -176,7 +176,7 @@ function startHTTP() {
     // documented install steps got auto-defaulted to http mode.
     console.error(`
 ┌──────────────────────────────────────────────────────┐
-│              ENGRAMPORT v2.2.0                       │
+│              ENGRAMPORT v2.2.1                       │
 │              Give any bot a brain.                   │
 ├──────────────────────────────────────────────────────┤
 │  Eidetic API:  ${config.apiUrl.padEnd(37)}│

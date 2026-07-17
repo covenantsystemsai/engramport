@@ -1,6 +1,6 @@
 {
   "name": "engramport",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Give any AI agent persistent memory. MCP-native, bring-your-own-LLM (any model via OpenRouter), graph-RAG.",
   "homepage": "https://engramport.com",
   "repository": {
@@ -39,6 +39,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "test": "node --import tsx --test test/config.smoke.test.ts",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "prepublishOnly": "npm run build"

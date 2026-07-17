@@ -6,9 +6,9 @@
  * Supports stdio (Claude Desktop) and HTTP/SSE (remote bots).
  *
  * Setup:
- *   EIDETIC_API_URL=http://localhost:8000
- *   EIDETIC_API_KEY=ek_your_key_here
- *   EIDETIC_NAMESPACE=my-bot-brain
+ *   ENGRAMPORT_API_URL=http://localhost:8000    (legacy alias: EIDETIC_API_URL)
+ *   ENGRAMPORT_API_KEY=ek_your_key_here         (legacy alias: EIDETIC_API_KEY)
+ *   ENGRAMPORT_NAMESPACE=my-bot-brain           (legacy alias: EIDETIC_NAMESPACE)
  *
  * Run:
  *   ENGRAMPORT_MODE=stdio  npx engramport   # Claude Desktop

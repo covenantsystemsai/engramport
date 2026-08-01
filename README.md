@@ -43,7 +43,7 @@ Twelve MCP tools, mapped 1:1 to a graph-RAG memory substrate:
 | `groom` | Auto-discover typed edges between memories: `supports`, `contradicts`, `synthesizes`, and more. |
 | `dream` | Cluster analysis. Brain reads connected memories and produces higher-order INSIGHT and PRINCIPLE nodes. |
 | `inspect` | Brain vitals: memory count, edge count, Graph Quality Index. |
-| `fetch_memory` | Read one memory by ID. Returns its content, type, provenance hash, metadata, and linked neighbors. |
+| `fetch_memory` | Read one memory by ID. Returns its content, type, content hash, metadata, and linked neighbors. |
 | `delete_memory` | Remove one memory by ID. The vector and its graph edges go with it. |
 | `list_namespaces` | List every namespace this key can reach, each with its memory count. |
 | `export_graph` | Export a namespace's graph: every node and every typed edge between them. |
@@ -99,7 +99,7 @@ Defaults flip automatically based on your `LLM_API_KEY` prefix. Override any tie
 
 Most memory layers stop at vector similarity. EngramPort builds a typed graph on top: every memory you store is auto-linked to its semantic neighbors, and the `groom` and `dream` passes promote dense clusters into named insights and principles. Recall returns direct vector matches AND graph-expanded context. The result is responses grounded in the patterns across your memories, not just the nearest paragraph.
 
-The underlying substrate is [Eidetic](https://engramport.com/docs/architecture), a graph-RAG engine running on Pinecone for vectors and Supabase Postgres for the graph layer. EngramPort is the MCP wrapper that exposes the substrate to any agent.
+The substrate is a graph-RAG engine over managed vector and Postgres storage. EngramPort is the MCP wrapper that exposes the substrate to any agent.
 
 ## Quickstart
 
@@ -128,7 +128,7 @@ See [engramport.com/docs/quickstart](https://engramport.com/docs/quickstart) for
 | Graph database (Supabase Postgres) | EngramPort |
 | Embedding generation (OpenAI `text-embedding-3-small`) | EngramPort |
 | MCP transport (stdio + HTTP) | EngramPort |
-| Memory substrate (MandelDB) | EngramPort |
+| Memory substrate | EngramPort |
 | **LLM completions** (chat, dream synthesis) | **You** (your provider API key) |
 
 Your LLM bill goes to your provider directly. Our infrastructure cost is covered by your tier subscription.
@@ -142,7 +142,7 @@ Your LLM bill goes to your provider directly. Our infrastructure cost is covered
 | Memories stored | 1,000 | 100,000 | 1,000,000 | 1M per user | custom |
 | Daily `groom`/`dream` | 1/day | 4/day | 24/day | 24/day | custom |
 | `intense` mode | gated | yes | yes | yes | yes |
-| Aegis audit log | none | none | basic | full | full |
+| Audit log | none | none | basic | full | full |
 | Workspace SSO | no | no | no | yes | yes |
 | Sentinel OS bundled | no | no | no | no | yes |
 
@@ -150,18 +150,22 @@ LLM cost is yours regardless of tier.
 
 Sign up free at [engramport.com](https://engramport.com).
 
-## Privacy and provenance
+## Privacy and data integrity
 
 - Your memories are stored in your namespace on Pinecone and Supabase. We do not train models on your memories.
 - Your LLM API key is encrypted at rest using AES-256-GCM. It is decrypted only at request time to forward your call to your provider.
-- Every memory carries a cryptographic provenance hash via [Aegis](https://engramport.com/docs/aegis), a dual-strand DNA-seal of the content at creation time. Tampering is detectable.
+- Every memory carries a SHA-256 content hash, so any later alteration of a
+  stored memory is detectable. This is **tamper-evidence**, not cryptographic
+  provenance: a hash produced and served by the same service cannot prove
+  origin to a third party. Digital signatures over published checkpoints are on
+  the roadmap and are not shipped today.
 - Full data export is available from your dashboard at any time.
 
 See [engramport.com/docs/privacy](https://engramport.com/docs/privacy) and [engramport.com/terms](https://engramport.com/terms).
 
 ## Project
 
-EngramPort is a product of **Covenant Systems AI LLC**, a North Carolina LLC. Source for this MCP wrapper is MIT-licensed. The underlying MandelDB substrate is hosted; reach us at [hello@covenantsystems.ai](mailto:hello@covenantsystems.ai) for enterprise self-host inquiries.
+EngramPort is a product of **Covenant Systems AI LLC**, a North Carolina LLC. Source for this MCP wrapper is MIT-licensed. The underlying engine is proprietary.ai](mailto:hello@covenantsystems.ai) for enterprise self-host inquiries.
 
 ## Contributing
 

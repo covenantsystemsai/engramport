@@ -169,7 +169,7 @@ EngramPort is a product of **Covenant Systems AI LLC**, a North Carolina LLC. So
 
 ## Contributing
 
-Issues and pull requests welcome at [github.com/covenantsystemsai/engramport](https://github.com/covenantsystemsai/engramport). The MCP wrapper is intentionally thin; substrate-level changes live in the private MandelDB repo, but improvements to the wrapper, docs, and client-integration patterns are open contributions.
+Issues and pull requests welcome at [github.com/covenantsystemsai/engramport](https://github.com/covenantsystemsai/engramport). The MCP wrapper is intentionally thin; substrate-level changes are made privately, but improvements to the wrapper, docs, and client-integration patterns are open contributions.
 
 ---
 

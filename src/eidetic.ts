@@ -8,6 +8,7 @@
 import { config } from "./config.js";
 import { getIdToken } from "./auth.js";
 import { backendKey } from "./caller.js";
+import { chunkText } from "./chunk.js";
 
 async function request(method: string, path: string, body?: unknown): Promise<unknown> {
   const url = `${config.apiUrl}${path}`;
@@ -159,22 +160,4 @@ export async function listNamespaces(): Promise<unknown> {
 
 export async function exportBrain(namespace: string): Promise<unknown> {
   return request("GET", `/v2/memory/export/${encodeURIComponent(namespace)}`);
-}
-
-// ── Helpers ───────────────────────────────────────────────
-
-function chunkText(text: string, maxChars: number): string[] {
-  const chunks: string[] = [];
-  const paragraphs = text.split(/\n\n+/);
-  let current = "";
-
-  for (const para of paragraphs) {
-    if (current.length + para.length + 2 > maxChars && current.length > 0) {
-      chunks.push(current.trim());
-      current = "";
-    }
-    current += (current ? "\n\n" : "") + para;
-  }
-  if (current.trim()) chunks.push(current.trim());
-  return chunks.length > 0 ? chunks : [text];
 }

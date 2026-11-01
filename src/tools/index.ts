@@ -17,6 +17,7 @@
 
 import { config } from "../config.js";
 import * as eidetic from "../eidetic.js";
+import { executeStoreTool } from "./store.js";
 
 // ── Tool Definitions ──────────────────────────────────────
 
@@ -103,6 +104,12 @@ export const toolDefinitions = [
         date_to: {
           type: "string",
           description: "Only return memories created on or before this ISO date",
+        },
+        mode: {
+          type: "string",
+          enum: ["vector", "keyword"],
+          description:
+            "Postgres store only: vector (by meaning, the default when embeddings are on) or keyword (exact words, names, numbers)",
         },
       },
       required: ["query"],
@@ -292,6 +299,7 @@ export async function executeTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
+  if (config.store === "postgres") return executeStoreTool(name, args);
   const ns = (args.namespace as string) || config.namespace;
 
   try {

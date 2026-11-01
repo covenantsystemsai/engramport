@@ -60,7 +60,8 @@ jobs:
 
   # Applies the SQL migrations to a throwaway Postgres with pgvector and runs
   # the row security tests: every cross-namespace and cell-to-cell read or
-  # write must fail. Postgres 17 matches the Supabase project.
+  # write must fail. Then runs the server's store against it as the app role.
+  # Postgres 17 matches the Supabase project.
   db:
     runs-on: ubuntu-latest
     services:
@@ -83,3 +84,20 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres@localhost:5432/postgres
         run: db/test/run.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The server's Postgres store, run as engramport_app on a fresh database.
+      - name: Store tests
+        env:
+          ADMIN_URL: postgresql://postgres@localhost:5432
+        run: |
+          psql "$ADMIN_URL/postgres" -X -q -v ON_ERROR_STOP=1 -c 'CREATE DATABASE store_test'
+          DATABASE_URL="$ADMIN_URL/store_test" db/migrate.sh
+          ENGRAMPORT_TEST_DATABASE_URL="$ADMIN_URL/store_test" npm run test:store

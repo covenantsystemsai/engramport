@@ -38,3 +38,12 @@ Needs Postgres 17 with pgvector 0.7 or later, as a database you can throw away:
 ```
 DATABASE_URL=postgresql://postgres@localhost:5432/postgres db/test/run.sh
 ```
+
+The server's store tests run every store call as `engramport_app` against a
+migrated throwaway database:
+
+```
+psql postgresql://postgres@localhost:5432/postgres -c 'CREATE DATABASE store_test'
+DATABASE_URL=postgresql://postgres@localhost:5432/store_test db/migrate.sh
+ENGRAMPORT_TEST_DATABASE_URL=postgresql://postgres@localhost:5432/store_test npm run test:store
+```

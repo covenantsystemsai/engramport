@@ -63,3 +63,42 @@ test("namespace: ENGRAMPORT_NAMESPACE primary, EIDETIC_NAMESPACE fallback, 'defa
   assert.equal(resolveConfig(env({ EIDETIC_NAMESPACE: "brain-b" })).namespace, "brain-b");
   assert.equal(resolveConfig(env({})).namespace, "default");
 });
+
+const pepper = Buffer.alloc(32, 9).toString("base64");
+const pg = (o: Record<string, string>) =>
+  resolveConfig(env({ ENGRAMPORT_STORE: "postgres", ENGRAMPORT_KEY_PEPPER: pepper, ...o }));
+
+test("store defaults to eidetic; an unknown store is named", () => {
+  assert.equal(resolveConfig(env({})).store, "eidetic");
+  assert.match(configProblems(resolveConfig(env({ ENGRAMPORT_STORE: "pinecone" })), "stdio")[0], /eidetic or postgres/);
+});
+
+test("postgres store: needs no API URL, but a database URL and a pepper", () => {
+  assert.deepEqual(
+    configProblems(pg({ ENGRAMPORT_DATABASE_URL: "postgresql://engramport_app@db.example.com:5432/postgres" }), "http"),
+    [],
+  );
+  assert.match(configProblems(pg({}), "http")[0], /ENGRAMPORT_DATABASE_URL is not set/);
+  assert.match(
+    configProblems(
+      resolveConfig(env({ ENGRAMPORT_STORE: "postgres", ENGRAMPORT_DATABASE_URL: "postgresql://engramport_app@db.example.com/postgres" })),
+      "http",
+    )[0],
+    /ENGRAMPORT_KEY_PEPPER/,
+  );
+});
+
+test("postgres store: refuses admin roles, weak sslmode and a local db when hosted", () => {
+  assert.match(configProblems(pg({ ENGRAMPORT_DATABASE_URL: "postgresql://postgres@db.example.com/postgres" }), "http")[0], /engramport_app/);
+  assert.match(
+    configProblems(pg({ ENGRAMPORT_DATABASE_URL: "postgresql://postgres.abc@pooler.example.com/postgres" }), "http")[0],
+    /engramport_app/,
+  );
+  assert.match(
+    configProblems(pg({ ENGRAMPORT_DATABASE_URL: "postgresql://engramport_app@db.example.com/postgres?sslmode=require" }), "http")[0],
+    /sslmode/,
+  );
+  const local = { ENGRAMPORT_DATABASE_URL: "postgresql://engramport_app@localhost:5432/postgres" };
+  assert.match(configProblems(pg(local), "http")[0], /points at this machine/);
+  assert.equal(configProblems(pg(local), "stdio").length, 0);
+});

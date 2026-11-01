@@ -73,7 +73,7 @@ function startHTTP() {
 │              ENGRAMPORT v${VERSION.padEnd(28)}│
 │              Give any bot a brain.                   │
 ├──────────────────────────────────────────────────────┤
-│  Eidetic API:  ${config.apiUrl.padEnd(37)}│
+│  Store:        ${(config.store === "postgres" ? "postgres" : config.apiUrl).padEnd(37)}│
 │  Namespace:    ${config.namespace.padEnd(37)}│
 │  Port:         ${String(config.port).padEnd(37)}│
 ├──────────────────────────────────────────────────────┤

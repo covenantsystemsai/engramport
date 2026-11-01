@@ -59,3 +59,39 @@ test("keyPreview shows at most a third of a short key", () => {
   assert.equal(keyPreview("abcdef"), "ab… (6 chars)");
   assert.ok(keyPreview(KEY).startsWith("ek_live… "));
 });
+
+test("doctor on the postgres store shows the database user and host, never the password", async () => {
+  const lines: string[] = [];
+  const secret = "pw" + "z".repeat(20);
+  const cfg = resolveConfig(env({
+    ENGRAMPORT_MODE: "http",
+    ENGRAMPORT_STORE: "postgres",
+    ENGRAMPORT_DATABASE_URL: `postgresql://engramport_app:${secret}@db.example.com:5432/postgres`,
+    ENGRAMPORT_KEY_PEPPER: Buffer.alloc(32, 3).toString("base64"),
+  }));
+  let pinged = false;
+  const code = await runDoctor(cfg, (l) => lines.push(l), okFetch, noToken, async () => {
+    pinged = true;
+  });
+  assert.equal(code, 0);
+  assert.ok(pinged);
+  const text = lines.join("\n");
+  assert.ok(!text.includes(secret));
+  assert.match(text, /engramport_app @ db\.example\.com:5432\/postgres/);
+  assert.match(text, /keyword search only/);
+});
+
+test("doctor on the postgres store exits 1 when the database is unreachable", async () => {
+  const lines: string[] = [];
+  const cfg = resolveConfig(env({
+    ENGRAMPORT_MODE: "http",
+    ENGRAMPORT_STORE: "postgres",
+    ENGRAMPORT_DATABASE_URL: "postgresql://engramport_app@db.example.com/postgres",
+    ENGRAMPORT_KEY_PEPPER: Buffer.alloc(32, 3).toString("base64"),
+  }));
+  const code = await runDoctor(cfg, (l) => lines.push(l), okFetch, noToken, async () => {
+    throw new Error("timeout");
+  });
+  assert.equal(code, 1);
+  assert.match(lines.join("\n"), /database:\s+unreachable \(timeout\)/);
+});

@@ -120,6 +120,20 @@ See [engramport.com/docs/quickstart](https://engramport.com/docs/quickstart) for
 | `ENGRAMPORT_MODE` | no | `stdio` or `http`. Picked automatically when unset. |
 | `ENGRAMPORT_ALLOW_LOCAL_BACKEND` | no | `true` lets hosted mode talk to a backend on `localhost`, for local development only. |
 
+### Postgres store (preview)
+
+Set `ENGRAMPORT_STORE=postgres` and the server reads and writes the memory schema in `db/` directly instead of calling the backend API. It is off by default while it is being built out. Keys for this store look like `ep_live_...` and are bound to one namespace; a `namespace` argument, when sent, must be the key's own.
+
+| Variable | Required | What it does |
+|---|---|---|
+| `ENGRAMPORT_STORE` | no | `eidetic` (default) or `postgres`. |
+| `ENGRAMPORT_DATABASE_URL` | postgres | Connection URL for the `engramport_app` role. Admin roles are refused, since they skip row security. Leave `sslmode` out: TLS to a remote host is always verified. |
+| `ENGRAMPORT_DATABASE_CA_FILE` | for Supabase | The database's CA certificate file, so TLS can be verified. |
+| `ENGRAMPORT_KEY_PEPPER` | postgres | At least 32 random bytes, base64 or hex, used to hash keys. |
+| `OPENAI_API_KEY` | no | Turns on embeddings and vector recall. Without it, recall uses keyword search. |
+
+Keep all of these in a secrets manager, never in a file in the repo. On this store `delete_memory` retracts: the memory stops coming back from recall but its text is kept for the record. `chat`, `groom`, `dream` and `export_graph` are not available on it yet.
+
 Run `npx engramport doctor` to check your setup. It prints the settings it resolved (only a short prefix of your key) and whether the API answers.
 
 ## How it fits with other agent frameworks

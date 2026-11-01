@@ -1,0 +1,129 @@
+/**
+ * Tool calls served by the Postgres store (ENGRAMPORT_STORE=postgres).
+ *
+ * remember, recall, upload, fetch_memory, delete_memory (which retracts),
+ * list_namespaces and inspect run against the memory schema. chat, groom,
+ * dream and export_graph need the graph and synthesis work that comes in later
+ * PRs, so they answer with a clear error instead of reaching the old backend.
+ */
+
+import { config } from "../config.js";
+import { backendKey } from "../caller.js";
+import { openAIEmbedder } from "../embeddings.js";
+import { decodePepper } from "../keys.js";
+import { createPool, MEMORY_KINDS, MemoryKind, PostgresStore, StoreError } from "../store/postgres.js";
+
+type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
+
+const NOT_YET = new Set(["chat", "groom", "dream", "export_graph"]);
+
+let shared: PostgresStore | undefined;
+
+/** The process-wide store, built from config on first use. */
+export function sharedStore(): PostgresStore {
+  if (!shared) {
+    const pepper = decodePepper(config.keyPepper);
+    if (!pepper) throw new Error("ENGRAMPORT_KEY_PEPPER is missing or too short");
+    shared = new PostgresStore(createPool(config.databaseUrl, config.databaseCaFile || undefined), {
+      pepper,
+      embedder: config.openaiApiKey ? openAIEmbedder(config.openaiApiKey) : undefined,
+      transport: config.mode === "stdio" ? "stdio" : "streamable_http",
+    });
+  }
+  return shared;
+}
+
+/** The old tools call a plain fact "memory"; the schema calls it "fact". */
+function toKind(value: unknown): MemoryKind | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (value === "memory") return "fact";
+  if (MEMORY_KINDS.includes(value as MemoryKind)) return value as MemoryKind;
+  throw new StoreError("invalid", `unknown memory type: ${String(value)}`);
+}
+
+const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
+const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+
+function ok(result: unknown): ToolResult {
+  return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+}
+
+function fail(error: string, code: string): ToolResult {
+  return { content: [{ type: "text", text: JSON.stringify({ error, code }) }], isError: true };
+}
+
+export async function executeStoreTool(
+  name: string,
+  args: Record<string, unknown>,
+  store?: PostgresStore,
+  callerKey?: string,
+): Promise<ToolResult> {
+  // Only a namespace the caller actually sent is checked against the key;
+  // the configured default belongs to the old backend.
+  const namespace = str(args.namespace);
+  try {
+    let key: string;
+    try {
+      key = callerKey ?? backendKey(config.apiKey);
+    } catch {
+      throw new StoreError("unauthorized", "no EngramPort key for this request");
+    }
+    store ??= sharedStore();
+    switch (name) {
+      case "remember": {
+        const metadata = args.metadata && typeof args.metadata === "object" && !Array.isArray(args.metadata)
+          ? (args.metadata as Record<string, unknown>)
+          : undefined;
+        return ok(await store.remember(key, {
+          content: args.content as string,
+          kind: toKind(args.type),
+          metadata,
+          dedupKey: str(args.dedup_key),
+          sourceUrl: str(args.source_url),
+          namespace,
+        }));
+      }
+      case "recall": {
+        const mode = str(args.mode);
+        if (mode !== undefined && mode !== "vector" && mode !== "keyword") {
+          throw new StoreError("invalid", "mode must be vector or keyword");
+        }
+        if (str(args.source_filter)) throw new StoreError("invalid", "source_filter is not supported by this store yet");
+        return ok(await store.recall(key, {
+          query: args.query as string,
+          topK: num(args.top_k),
+          mode: mode as "vector" | "keyword" | undefined,
+          kind: toKind(args.node_type_filter),
+          minScore: num(args.min_score),
+          dateFrom: str(args.date_from),
+          dateTo: str(args.date_to),
+          namespace,
+        }));
+      }
+      case "upload":
+        return ok(await store.upload(key, {
+          content: args.content as string,
+          filename: args.filename as string,
+          namespace,
+        }));
+      case "fetch_memory":
+        return ok(await store.fetch(key, args.memory_id as string, namespace));
+      case "delete_memory":
+        return ok(await store.retract(key, args.memory_id as string, namespace));
+      case "list_namespaces":
+        return ok(await store.listNamespaces(key));
+      case "inspect":
+        return ok(await store.inspect(key, namespace));
+      default:
+        if (NOT_YET.has(name)) return fail(`${name} is not available on the Postgres store yet`, "not_available");
+        return fail(`Unknown tool: ${name}`, "invalid");
+    }
+  } catch (err) {
+    if (err instanceof StoreError) return fail(err.message, err.code);
+    // Database errors can carry row values; log only the class, return nothing specific.
+    const code = (err as { code?: string })?.code;
+    console.error(`[engramport] store error in ${name}${code ? ` (${code})` : ""}`);
+    if (code === "42501") return fail("not allowed for this key", "forbidden");
+    return fail("store error", "internal");
+  }
+}

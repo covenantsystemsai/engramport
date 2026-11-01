@@ -76,6 +76,7 @@ INSERT INTO memory.api_keys (id, namespace_id, actor_id, prefix, key_hash, scope
   ('00000000-0000-7000-8000-0000000000f2', '00000000-0000-7000-8000-000000000112', '00000000-0000-7000-8000-00000000a002', 'ek_cell2000', sha256('cell-2'), '{read,write}', NULL, NULL),
   ('00000000-0000-7000-8000-0000000000f3', '00000000-0000-7000-8000-000000000121', '00000000-0000-7000-8000-00000000a002', 'ek_cell3000', sha256('cell-3'), '{read,write}', NULL, NULL),
   ('00000000-0000-7000-8000-0000000000e1', '00000000-0000-7000-8000-000000000111', '00000000-0000-7000-8000-00000000a002', 'ek_cell1ro0', sha256('cell-1-ro'), '{read}', NULL, NULL),
+  ('00000000-0000-7000-8000-0000000000f4', '00000000-0000-7000-8000-000000000111', '00000000-0000-7000-8000-00000000a002', 'ek_cell1b00', sha256('cell-1-b'), '{read,write}', NULL, NULL),
   ('00000000-0000-7000-8000-0000000000d1', '00000000-0000-7000-8000-000000000111', '00000000-0000-7000-8000-00000000a001', 'ek_cell1rv0', sha256('cell-1-rv'), '{read,write}', NULL, now()),
   ('00000000-0000-7000-8000-0000000000d2', '00000000-0000-7000-8000-000000000111', '00000000-0000-7000-8000-00000000a001', 'ek_cell1ex0', sha256('cell-1-ex'), '{read,write}', now() - interval '1 minute', NULL),
   ('00000000-0000-7000-8000-0000000000d3', '00000000-0000-7000-8000-000000000111', '00000000-0000-7000-8000-00000000a003', 'ek_cell1da0', sha256('cell-1-da'), '{read,write}', NULL, NULL);
@@ -265,13 +266,52 @@ SELECT t.expect_denied('the same dedup key twice in one namespace',
   $$SELECT memory.remember('fact', 'twice', 'remember', 'rest', p_dedup_key => 'k1')$$);
 ROLLBACK;
 BEGIN; SELECT t.as_key('00000000-0000-7000-8000-0000000000f1', :'c1');
-INSERT INTO memory.provenance (namespace_id, api_key_id, actor_id, tool, transport)
-  VALUES (:'c1', '00000000-0000-7000-8000-0000000000f1', '00000000-0000-7000-8000-00000000a001', 'x', 'rest')
+INSERT INTO memory.provenance (namespace_id, api_key_id, actor_id, tool, transport, content_sha256)
+  VALUES (:'c1', '00000000-0000-7000-8000-0000000000f1', '00000000-0000-7000-8000-00000000a001', 'x', 'rest',
+          encode(sha256('hash me'::bytea), 'hex'))
   RETURNING id AS p1 \gset
 INSERT INTO memory.memories (namespace_id, kind, content, content_sha256, provenance_id)
   VALUES (:'c1', 'fact', 'hash me', 'not-a-real-hash', :'p1');
 SELECT t.expect_count('the stored hash is computed, not taken from the caller',
   $$SELECT 1 FROM memory.memories WHERE content = 'hash me' AND content_sha256 = encode(sha256('hash me'::bytea), 'hex')$$, 1);
+ROLLBACK;
+RESET ROLE;
+
+\echo '-- provenance belongs to one key and one write'
+SELECT id AS c1_prov FROM memory.provenance WHERE namespace_id = :'c1' AND api_key_id = '00000000-0000-7000-8000-0000000000f1' \gset
+-- An unused provenance row of key 1, so only the key binding can refuse it.
+SET ROLE engramport_app;
+BEGIN; SELECT t.as_key('00000000-0000-7000-8000-0000000000f1', :'c1');
+INSERT INTO memory.provenance (namespace_id, api_key_id, actor_id, tool, transport, content_sha256)
+  VALUES (:'c1', '00000000-0000-7000-8000-0000000000f1', '00000000-0000-7000-8000-00000000a001', 'x', 'rest',
+          encode(sha256('borrowed'::bytea), 'hex'))
+  RETURNING id AS spare_prov \gset
+COMMIT;
+BEGIN; SELECT t.as_key('00000000-0000-7000-8000-0000000000f4', :'c1');
+SELECT t.expect_denied('a second key in the same cell borrows the first key''s provenance',
+  format($$INSERT INTO memory.memories (namespace_id, kind, content, content_sha256, provenance_id)
+           VALUES (%L, 'fact', 'borrowed', 'x', %L)$$, :'c1', :'spare_prov'));
+ROLLBACK;
+BEGIN; SELECT t.as_key('00000000-0000-7000-8000-0000000000f1', :'c1');
+SELECT t.expect_denied('the same key reuses its own provenance for a second memory',
+  format($$INSERT INTO memory.memories (namespace_id, kind, content, content_sha256, provenance_id)
+           VALUES (%L, 'fact', 'cell 1 secret', 'x', %L)$$, :'c1', :'c1_prov'));
+INSERT INTO memory.provenance (namespace_id, api_key_id, actor_id, tool, transport, content_sha256)
+  VALUES (:'c1', '00000000-0000-7000-8000-0000000000f1', '00000000-0000-7000-8000-00000000a001', 'x', 'rest',
+          encode(sha256('what was recorded'::bytea), 'hex'))
+  RETURNING id AS p2 \gset
+SELECT t.expect_denied('a memory whose text differs from what its provenance recorded',
+  format($$INSERT INTO memory.memories (namespace_id, kind, content, content_sha256, provenance_id)
+           VALUES (%L, 'fact', 'something else', 'x', %L)$$, :'c1', :'p2'));
+ROLLBACK;
+RESET ROLE;
+SELECT t.expect_denied('a write-only key cannot be created',
+  format($$INSERT INTO memory.api_keys (namespace_id, actor_id, prefix, key_hash, scopes)
+           VALUES (%L, '00000000-0000-7000-8000-00000000a001', 'ek_writeo00', sha256('w'), '{write}')$$, :'c1'));
+SET ROLE engramport_app;
+BEGIN; SELECT t.as_key('00000000-0000-7000-8000-0000000000f4', :'c1');
+SELECT t.expect_count('a second key in the same cell still writes its own memories',
+  $$SELECT 1 WHERE memory.remember('fact', 'from key b', 'remember', 'rest') IS NOT NULL$$, 1);
 ROLLBACK;
 RESET ROLE;
 

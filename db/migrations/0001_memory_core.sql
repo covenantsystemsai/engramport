@@ -111,8 +111,10 @@ CREATE TABLE memory.api_keys (
   actor_id uuid NOT NULL REFERENCES memory.actors(id),
   prefix text NOT NULL UNIQUE CHECK (prefix ~ '^[A-Za-z0-9_]{8,32}$'),
   key_hash bytea NOT NULL UNIQUE CHECK (octet_length(key_hash) = 32),
+  -- read or read+write; a write-only key is refused, since every read path
+  -- trusts any valid key.
   scopes text[] NOT NULL DEFAULT '{read,write}'
-    CHECK (scopes <@ ARRAY['read', 'write']::text[] AND cardinality(scopes) > 0),
+    CHECK (scopes <@ ARRAY['read', 'write']::text[] AND 'read' = ANY (scopes)),
   expires_at timestamptz,
   revoked_at timestamptz,
   last_used_at timestamptz,
@@ -181,6 +183,8 @@ CREATE TABLE memory.memory_embeddings (
 
 CREATE INDEX memories_ns_status_created ON memory.memories (namespace_id, status, created_at DESC);
 CREATE INDEX memories_fts ON memory.memories USING gin (fts);
+-- One memory per provenance row, so a write can't borrow an earlier one.
+CREATE UNIQUE INDEX memories_provenance ON memory.memories (provenance_id);
 CREATE UNIQUE INDEX memories_dedup ON memory.memories (namespace_id, dedup_key)
   WHERE dedup_key IS NOT NULL AND status = 'active';
 CREATE INDEX memory_embeddings_hnsw ON memory.memory_embeddings
@@ -331,8 +335,10 @@ CREATE POLICY memories_read ON memory.memories FOR SELECT TO engramport_app
   USING (namespace_id IN (SELECT memory.readable_namespaces()));
 CREATE POLICY memories_write ON memory.memories FOR INSERT TO engramport_app
   WITH CHECK (memory.can_write() AND namespace_id = memory.current_namespace()
-    AND EXISTS (SELECT 1 FROM memory.provenance p
-                WHERE p.id = provenance_id AND p.namespace_id = memory.current_namespace())
+    -- The provenance row must be this key's own, for this exact content.
+    AND EXISTS (SELECT 1 FROM memory.provenance p JOIN memory.current_key() k
+                  ON (p.namespace_id, p.api_key_id, p.actor_id) = (k.namespace_id, k.api_key_id, k.actor_id)
+                WHERE p.id = memories.provenance_id AND p.content_sha256 = memories.content_sha256)
     AND (supersedes_id IS NULL OR memory.is_own_memory(supersedes_id)));
 CREATE POLICY memories_status ON memory.memories FOR UPDATE TO engramport_app
   USING (memory.can_write() AND namespace_id = memory.current_namespace())

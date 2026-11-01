@@ -110,6 +110,18 @@ The substrate is a graph-RAG engine over managed vector and Postgres storage. En
 
 See [engramport.com/docs/quickstart](https://engramport.com/docs/quickstart) for a step-by-step walkthrough.
 
+## Configuration
+
+| Variable | Required | What it does |
+|---|---|---|
+| `ENGRAMPORT_API_URL` | yes | Your EngramPort API URL, from your config snippet. Must be `https` (plain `http` only for `localhost`). There is no default. |
+| `ENGRAMPORT_API_KEY` | stdio mode | Your `ek_` key. In hosted (`http`) mode it's ignored: each caller sends its own key as `Authorization: Bearer <key>`. |
+| `ENGRAMPORT_NAMESPACE` | no | Default namespace for tool calls that don't name one. |
+| `ENGRAMPORT_MODE` | no | `stdio` or `http`. Picked automatically when unset. |
+| `ENGRAMPORT_ALLOW_LOCAL_BACKEND` | no | `true` lets hosted mode talk to a backend on `localhost`, for local development only. |
+
+Run `npx engramport doctor` to check your setup. It prints the settings it resolved (only a short prefix of your key) and whether the API answers.
+
 ## How it fits with other agent frameworks
 
 | Client | Config path | Notes |

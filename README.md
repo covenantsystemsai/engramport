@@ -134,6 +134,29 @@ Set `ENGRAMPORT_STORE=postgres` and the server reads and writes the memory schem
 
 Keep all of these in a secrets manager, never in a file in the repo. On this store `delete_memory` retracts: the memory stops coming back from recall but its text is kept for the record. `chat`, `groom`, `dream` and `export_graph` are not available on it yet.
 
+#### Managing namespaces and keys
+
+`engramport admin` creates namespaces and actors and mints, rotates and revokes keys for this store. It runs as the `engramport_admin` database role, which can do exactly that and nothing more: it cannot read memories, provenance, embeddings or stored key hashes, and it cannot delete anything.
+
+```
+engramport admin namespace create acme                # a city
+engramport admin namespace create acme/ops            # a tower
+engramport admin namespace create acme/ops/pilot      # a cell
+engramport admin actor create claude --kind agent --display "Claude"
+engramport admin key mint --namespace acme/ops/pilot --actor claude --expires-in 90d
+engramport admin key list --namespace acme/ops/pilot
+engramport admin key rotate ep_live_XXXXXXXXXXXX --grace 24h
+engramport admin key revoke ep_live_XXXXXXXXXXXX
+```
+
+A minted key is printed once, alone on stdout, so you can pipe it straight into your secrets manager; only its HMAC is stored. Rotation keeps the old key working for the grace period (`--grace 0` revokes it at once), and revoking or disabling an actor takes effect on the key's next request. Revoke and rotate take the key's prefix, never the whole key, so keys stay out of shell history. City and tower names must not name a client.
+
+| Variable | What it does |
+|---|---|
+| `ENGRAMPORT_ADMIN_DATABASE_URL` | A login role that has been granted `SET` on `engramport_admin`. The tool switches to that role for every statement. |
+| `ENGRAMPORT_KEY_PEPPER` | The same pepper the server uses. Needed to mint and rotate. |
+| `ENGRAMPORT_DATABASE_CA_FILE` | As above. |
+
 Run `npx engramport doctor` to check your setup. It prints the settings it resolved (only a short prefix of your key) and whether the API answers.
 
 ## How it fits with other agent frameworks

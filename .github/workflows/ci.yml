@@ -43,7 +43,17 @@ jobs:
 
       # Scans the full history of the branch for committed keys and tokens.
       # The CLI image needs no license, unlike the gitleaks GitHub Action on orgs.
+      # The container runs as root over a runner-owned checkout, so git needs
+      # the mount marked safe, or gitleaks reads nothing and still exits 0.
+      # The grep makes a scan that could not read the repo fail the job.
       - name: Secret scan
-        uses: docker://zricethezav/gitleaks:v8.21.2
-        with:
-          args: detect --source=/github/workspace --redact --verbose --exit-code=1
+        run: |
+          set -o pipefail
+          docker run --rm -v "$PWD:/repo" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
+            zricethezav/gitleaks:v8.21.2 \
+            detect --source=/repo --redact --verbose --exit-code=1 2>&1 | tee gitleaks.log
+          if grep -q "failed to scan" gitleaks.log || ! grep -q "commits scanned" gitleaks.log; then
+            echo "::error::gitleaks did not scan the repository"
+            exit 1
+          fi

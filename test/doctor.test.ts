@@ -6,7 +6,8 @@ import { resolveConfig } from "../src/config.ts";
 import { keyPreview, runDoctor } from "../src/doctor.ts";
 
 const env = (o: Record<string, string>) => o as unknown as NodeJS.ProcessEnv;
-const KEY = "ek_live_abcdefghijklmnopqrstuvwxyz0123456789";
+// Fake key built at runtime so it is not a key-shaped literal in the source.
+const KEY = "ek_live_" + "x".repeat(36);
 
 const okFetch = (async () => new Response("{}", { status: 200 })) as typeof fetch;
 const downFetch = (async () => {

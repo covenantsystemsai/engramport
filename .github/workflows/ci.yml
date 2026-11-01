@@ -57,3 +57,29 @@ jobs:
             echo "::error::gitleaks did not scan the repository"
             exit 1
           fi
+
+  # Applies the SQL migrations to a throwaway Postgres with pgvector and runs
+  # the row security tests: every cross-namespace and cell-to-cell read or
+  # write must fail. Postgres 17 matches the Supabase project.
+  db:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.0-pg17
+        env:
+          # Throwaway container that lives only for this job.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Migrations and row security tests
+        env:
+          DATABASE_URL: postgresql://postgres@localhost:5432/postgres
+        run: db/test/run.sh

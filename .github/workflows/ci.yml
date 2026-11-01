@@ -1,0 +1,49 @@
+name: ci
+
+# Runs on every pull request and every push to main. A red check blocks the
+# merge once branch protection requires it.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      # Fails on any known high or critical vulnerability in what ships to users.
+      - name: Dependency audit
+        run: npm audit --omit=dev --audit-level=high
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Scans the full history of the branch for committed keys and tokens.
+      # The CLI image needs no license, unlike the gitleaks GitHub Action on orgs.
+      - name: Secret scan
+        uses: docker://zricethezav/gitleaks:v8.21.2
+        with:
+          args: detect --source=/github/workspace --redact --verbose --exit-code=1

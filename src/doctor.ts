@@ -8,6 +8,7 @@
 
 import { Config, configProblems } from "./config.js";
 import { VERSION } from "./server.js";
+import { getIdToken } from "./auth.js";
 
 export function keyPreview(key: string): string {
   if (!key) return "(not set)";
@@ -18,6 +19,7 @@ export async function runDoctor(
   cfg: Config,
   out: (line: string) => void = (l) => process.stderr.write(`${l}\n`),
   fetchImpl: typeof fetch = fetch,
+  idToken: (audience: string) => Promise<string> = getIdToken,
 ): Promise<number> {
   out(`EngramPort ${VERSION} doctor`);
   out(`  mode:      ${cfg.mode}`);
@@ -31,8 +33,16 @@ export async function runDoctor(
   if (!cfg.apiUrl || problems.some((p) => p.includes("not a valid URL"))) return 1;
 
   try {
-    const res = await fetchImpl(`${cfg.apiUrl}/health`, { signal: AbortSignal.timeout(5000) });
+    // Same Cloud Run gate as normal tool calls (see eidetic.ts), so an
+    // IAM-protected backend is not reported as broken.
+    const headers: Record<string, string> = {};
+    const token = await idToken(cfg.apiUrl);
+    if (token) headers["X-Serverless-Authorization"] = `Bearer ${token}`;
+    const res = await fetchImpl(`${cfg.apiUrl}/health`, { headers, signal: AbortSignal.timeout(5000) });
     out(`  health:    ${res.status} ${res.ok ? "ok" : res.statusText}`);
+    if (res.status === 401 || res.status === 403) {
+      out(`  hint:      the backend refused this identity${token ? "" : " (no Cloud Run ID token was available)"}`);
+    }
     if (!res.ok) problems.push("health check failed");
   } catch (err) {
     out(`  health:    unreachable (${err instanceof Error ? err.message : String(err)})`);

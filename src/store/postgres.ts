@@ -253,6 +253,18 @@ export class PostgresStore {
     if (!ctx.scopes.includes("write")) throw new StoreError("forbidden", "this key is read-only");
   }
 
+  /**
+   * Check the key (and write scope, and a namespace argument) before any paid
+   * call to the embedding provider, so an unknown or read-only key costs
+   * nothing. The write itself checks the key again in its own transaction.
+   */
+  private async preflight(rawKey: string, namespace: string | undefined, needWrite: boolean): Promise<void> {
+    await this.withKey(rawKey, async (_c, ctx) => {
+      PostgresStore.checkNamespace(ctx, namespace);
+      if (needWrite) PostgresStore.requireWrite(ctx);
+    });
+  }
+
   private async embedOrNull(texts: string[]): Promise<{ vectors: number[][] | null; warning?: string }> {
     if (!this.opts.embedder) return { vectors: null, warning: "no embedding provider is configured" };
     try {
@@ -311,6 +323,7 @@ export class PostgresStore {
     if (input.importance !== undefined && !(input.importance >= 0 && input.importance <= 1)) {
       throw new StoreError("invalid", "importance must be between 0 and 1");
     }
+    if (this.opts.embedder) await this.preflight(rawKey, input.namespace, true);
     const embedded = await this.embedOrNull([content]);
     return this.withKey(rawKey, async (c, ctx) => {
       PostgresStore.checkNamespace(ctx, input.namespace);
@@ -318,6 +331,11 @@ export class PostgresStore {
 
       let previous: string | null = null;
       if (input.dedupKey) {
+        // Two writers of the same new dedup key would both find no row to
+        // lock, so take a lock on the key itself first.
+        await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+          `engramport:dedup:${ctx.namespaceId}:${input.dedupKey}`,
+        ]);
         const cur = await c.query<{ id: string; content_sha256: string }>(
           `SELECT id, content_sha256 FROM memory.memories
            WHERE namespace_id = $1 AND dedup_key = $2 AND status = 'active' FOR UPDATE`,
@@ -370,6 +388,7 @@ export class PostgresStore {
     if (chunks.length > MAX_UPLOAD_CHUNKS) {
       throw new StoreError("invalid", `document is too large: more than ${MAX_UPLOAD_CHUNKS} chunks`);
     }
+    if (this.opts.embedder) await this.preflight(rawKey, input.namespace, true);
     const embedded = await this.embedOrNull(chunks);
     return this.withKey(rawKey, async (c, ctx) => {
       PostgresStore.checkNamespace(ctx, input.namespace);
@@ -424,6 +443,7 @@ export class PostgresStore {
     let mode = input.mode ?? (this.opts.embedder ? "vector" : "keyword");
     let queryVector: number[] | null = null;
     if (mode === "vector") {
+      await this.preflight(rawKey, input.namespace, false);
       const e = await this.embedOrNull([input.query]);
       if (e.vectors) queryVector = e.vectors[0];
       else {

@@ -21,12 +21,14 @@ const ADMIN_URL = process.env.ENGRAMPORT_TEST_DATABASE_URL;
 const pepper = randomBytes(32);
 
 /** Bag-of-words vectors: texts that share words point the same way. */
-function fakeEmbedder(): Embedder & { failNext: boolean } {
+function fakeEmbedder(): Embedder & { failNext: boolean; calls: number } {
   return {
     model: "fake-bow",
     dimension: EMBEDDING_DIMENSION,
     failNext: false,
+    calls: 0,
     async embed(texts: string[]) {
+      this.calls += 1;
       if (this.failNext) {
         this.failNext = false;
         throw new Error("provider down");
@@ -101,6 +103,7 @@ describe("postgres store", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
     await key("tower", tower.id, claude);
     await key("other", other.id, claude);
     await key("cell1", cell1.id, claude);
+    await key("cell1b", cell1.id, grok);
     await key("cell2", cell2.id, grok);
     await key("readonly", cell1.id, grok, { scopes: ["read"] });
     await key("revoked", cell1.id, claude, { revoked: true });
@@ -234,6 +237,27 @@ describe("postgres store", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
     assert.equal((await store.fetch(keys.cell1, v1.id)).memory.status, "superseded");
     const r = await store.recall(keys.cell1, { query: "billing contact", mode: "keyword", topK: 20 });
     assert.deepEqual(r.results.filter((x) => x.content.startsWith("Billing contact")).map((x) => x.id), [v2.id]);
+  });
+
+  test("concurrent writers of one new dedup key both succeed, one version stays active", async () => {
+    const [a, b] = await Promise.all([
+      store.remember(keys.cell1, { content: "Shipping cutoff is 3pm", dedupKey: "shipping-cutoff" }),
+      store.remember(keys.cell1b, { content: "Shipping cutoff is 4pm", dedupKey: "shipping-cutoff" }),
+    ]);
+    const statuses = await Promise.all([a.id, b.id].map(async (id) => (await store.fetch(keys.cell1, id)).memory.status));
+    assert.deepEqual(statuses.sort(), ["active", "superseded"]);
+  });
+
+  test("unknown and read-only keys never reach the embedding provider", async () => {
+    const before = embedder.calls;
+    const fake = mintKey().key;
+    await fails(store.remember(fake, { content: "costly" }), "unauthorized");
+    await fails(store.recall(fake, { query: "costly" }), "unauthorized");
+    await fails(store.upload(fake, { content: "costly doc", filename: "a.md" }), "unauthorized");
+    await fails(store.remember(keys.readonly, { content: "costly" }), "forbidden");
+    await fails(store.upload(keys.readonly, { content: "costly doc", filename: "a.md" }), "forbidden");
+    await fails(store.recall(keys.cell1, { query: "costly", namespace: paths.cell2 }), "forbidden");
+    assert.equal(embedder.calls, before);
   });
 
   test("an embedding outage still stores the memory, findable by keyword", async () => {

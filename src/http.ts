@@ -7,7 +7,11 @@
  * every POST gets a fresh server and transport, which suits Cloud Run's
  * scale-to-zero and multiple instances (no sticky sessions needed).
  *
- * The simple REST routes, /health, /tools and /stream are unchanged.
+ * Every route except /health needs the caller's own key, sent as
+ * `Authorization: Bearer <key>` (MCP clients) or `X-API-Key: <key>` (REST
+ * bots). That key is what reaches the backend, so a caller can only reach what
+ * its own key can reach. A missing or malformed key gets a 401 before any tool
+ * runs. The server's own ENGRAMPORT_API_KEY is never used in this mode.
  */
 
 import express, { Request, Response } from "express";
@@ -15,6 +19,7 @@ import cors from "cors";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import { createMcpServer, defaultDeps, McpDeps, VERSION } from "./server.js";
+import { keyFromHeaders, runAsCaller } from "./caller.js";
 
 export interface HttpAppOptions {
   apiUrl: string;
@@ -30,15 +35,28 @@ export function createHttpApp(opts: HttpAppOptions): express.Express {
   app.use(cors({ exposedHeaders: ["Mcp-Session-Id"] }));
   app.use(express.json({ limit: "10mb" }));
 
-  // Health
+  // Health stays open for uptime checks, so it says nothing about the backend
+  // URL or namespaces.
   app.get("/health", (_req: Request, res: Response) => {
-    res.json({
-      service: "engramport",
-      version: VERSION,
-      eidetic_api: opts.apiUrl,
-      namespace: opts.namespace,
-      tools: toolDefinitions.length,
-    });
+    res.json({ service: "engramport", version: VERSION, status: "ok" });
+  });
+
+  // Everything below needs a caller key. The key is bound to this request's
+  // async context and forwarded to the backend in place of any server key.
+  app.use((req: Request, res: Response, next) => {
+    const apiKey = keyFromHeaders(req.headers);
+    if (!apiKey) {
+      res
+        .status(401)
+        .set("WWW-Authenticate", 'Bearer realm="engramport"')
+        .json({
+          jsonrpc: "2.0",
+          error: { code: -32001, message: "Unauthorized: send your EngramPort key as Authorization: Bearer <key>" },
+          id: null,
+        });
+      return;
+    }
+    runAsCaller({ apiKey }, next);
   });
 
   // List tools

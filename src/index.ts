@@ -20,6 +20,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { config, validateConfig } from "./config.js";
 import { createMcpServer, VERSION } from "./server.js";
 import { createHttpApp } from "./http.js";
+import { setCallerRequired } from "./caller.js";
 import { prewarmToken } from "./auth.js";
 
 // CLI: `node dist/index.js prewarm` mints an OIDC token in this process and
@@ -38,7 +39,7 @@ if (process.argv[2] === "prewarm") {
   }
 }
 
-validateConfig();
+validateConfig(config.mode);
 
 // ═══════════════════════════════════════════════════════════
 // HTTP Server (for remote bots)
@@ -50,6 +51,8 @@ function startHTTP() {
   process.on("unhandledRejection", (reason) => console.error("[engramport] unhandledRejection:", reason));
   process.on("uncaughtException", (err) => console.error("[engramport] uncaughtException:", err));
 
+  // Hosted mode: every backend call must carry the caller's own key.
+  setCallerRequired(true);
   const app = createHttpApp({ apiUrl: config.apiUrl, namespace: config.namespace });
 
   app.listen(config.port, "0.0.0.0", () => {

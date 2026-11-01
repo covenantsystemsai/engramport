@@ -51,7 +51,15 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env) {
 /** Live config resolved from process.env at module load. */
 export const config = resolveConfig();
 
-export function validateConfig(): void {
+export function validateConfig(mode: "stdio" | "http" = config.mode): void {
+  if (mode === "http") {
+    // Hosted mode forwards each caller's own key; a server-wide key would give
+    // every caller its reach, so it is ignored here.
+    if (config.apiKey) {
+      console.warn("[EngramPort] ENGRAMPORT_API_KEY is ignored in http mode: each caller sends its own key");
+    }
+    return;
+  }
   if (!config.apiKey) {
     console.warn("[EngramPort] No ENGRAMPORT_API_KEY set — requests will fail in production");
   }

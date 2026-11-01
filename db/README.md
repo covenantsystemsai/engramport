@@ -8,7 +8,7 @@ SQL migrations for EngramPort's memory store on Supabase Postgres.
 - `migrate.sh`: applies new files to `$DATABASE_URL` and records each file's
   SHA-256 in `engramport_meta.schema_migrations`. A changed file stops the run.
 - `test/run.sh`: applies everything to a throwaway database and runs
-  `test/rls_test.sql`. CI runs it on every pull request.
+  `test/rls_test.sql` and `test/admin_test.sql`. CI runs it on every pull request.
 
 Applying to a real project needs the owner's yes first.
 
@@ -30,6 +30,25 @@ Applying to a real project needs the owner's yes first.
   change, so a retraction keeps the original.
 - `anon`, `authenticated` and `service_role` get no access to schema `memory`,
   and the schema is not exposed through Supabase's REST API.
+
+## Admin role (0002)
+
+- `engramport_admin` is what `engramport admin` runs as. It creates
+  namespaces and actors, mints keys (it writes the HMAC and can never read a
+  stored one back), revokes keys and sets their expiry. It cannot read or
+  write memories, provenance or embeddings, and cannot delete anything.
+- It has no login. Give an operator's login role the right to switch to it:
+
+  ```
+  GRANT engramport_admin TO <login role> WITH INHERIT FALSE, SET TRUE;
+  ```
+
+  `INHERIT FALSE` keeps the login itself powerless; the tool runs
+  `SET LOCAL ROLE engramport_admin` in every transaction, so even a more
+  powerful login is held to the admin role's limits.
+- A trigger on `api_keys` stops anyone, the owner included, from changing a
+  key's namespace, actor, prefix, hash or scopes, or restoring a revoked key.
+  To change scopes, rotate.
 
 ## Run the tests locally
 

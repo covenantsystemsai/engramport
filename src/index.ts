@@ -47,6 +47,18 @@ if (process.argv[2] === "doctor") {
   process.exit(await runDoctor(config));
 }
 
+// CLI: `engramport admin ...` manages namespaces, actors and keys in the
+// Postgres store, as the engramport_admin role. See src/admin.ts.
+if (process.argv[2] === "admin") {
+  const { AdminClient, runAdmin } = await import("./admin.js");
+  process.exit(
+    await runAdmin(process.argv.slice(3), () => AdminClient.fromEnv(), {
+      out: (line) => process.stdout.write(`${line}\n`),
+      err: (line) => process.stderr.write(`${line}\n`),
+    }),
+  );
+}
+
 validateConfig(config.mode);
 
 // ═══════════════════════════════════════════════════════════

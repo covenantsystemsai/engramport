@@ -1,0 +1,196 @@
+/**
+ * `engramport admin` against a real database with the memory schema applied.
+ *
+ * Needs ENGRAMPORT_TEST_DATABASE_URL: a superuser URL to a THROWAWAY database
+ * (CI uses a pgvector container). The test makes its own login roles, one
+ * granted SET on engramport_admin and one not, and runs the admin tool as the
+ * first, then proves each key it mints, rotates or revokes through the store
+ * running as engramport_app. Skipped when the variable is unset.
+ */
+import { after, before, describe, test } from "node:test";
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import pg from "pg";
+
+import { AdminClient, AdminError, runAdmin } from "../src/admin.ts";
+import { parseKey } from "../src/keys.ts";
+import { PostgresStore, StoreError } from "../src/store/postgres.ts";
+
+const SUPER_URL = process.env.ENGRAMPORT_TEST_DATABASE_URL;
+const pepper = randomBytes(32);
+
+function urlAs(user: string, password: string): string {
+  const u = new URL(SUPER_URL!);
+  u.username = user;
+  u.password = password;
+  return u.toString();
+}
+
+describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABASE_URL not set" }, () => {
+  const run = randomBytes(3).toString("hex");
+  const opsRole = `ops_${run}`;
+  const strangerRole = `stranger_${run}`;
+  const city = `adm-${run}`;
+  const cell = `${city}/tower/cell`;
+  let superPool: pg.Pool;
+  let appPool: pg.Pool;
+  let admin: AdminClient;
+  let store: PostgresStore;
+
+  before(async () => {
+    superPool = new pg.Pool({ connectionString: SUPER_URL });
+    await superPool.query(`CREATE ROLE ${opsRole} LOGIN PASSWORD 'ops-test-only'`);
+    await superPool.query(`GRANT engramport_admin TO ${opsRole} WITH INHERIT FALSE, SET TRUE`);
+    await superPool.query(`CREATE ROLE ${strangerRole} LOGIN PASSWORD 'stranger-test-only'`);
+    await superPool.query("ALTER ROLE engramport_app LOGIN PASSWORD 'engramport-test-only'");
+    admin = new AdminClient(new pg.Pool({ connectionString: urlAs(opsRole, "ops-test-only") }), pepper);
+    appPool = new pg.Pool({ connectionString: urlAs("engramport_app", "engramport-test-only") });
+    store = new PostgresStore(appPool, { pepper, transport: "stdio" });
+  });
+
+  after(async () => {
+    await admin?.close();
+    await appPool?.end();
+    await superPool?.query(`DROP OWNED BY ${opsRole}`).catch(() => undefined);
+    await superPool?.query(`DROP ROLE IF EXISTS ${opsRole}`).catch(() => undefined);
+    await superPool?.query(`DROP ROLE IF EXISTS ${strangerRole}`).catch(() => undefined);
+    await superPool?.end();
+  });
+
+  const refused = (p: Promise<unknown>, pattern: RegExp) =>
+    assert.rejects(p, (err: unknown) => err instanceof AdminError && pattern.test(err.message));
+  const storeFails = (p: Promise<unknown>, code: string) =>
+    assert.rejects(p, (err: unknown) => err instanceof StoreError && err.code === code);
+
+  test("the ops login has no direct rights; only the admin role does", async () => {
+    const ops = new pg.Pool({ connectionString: urlAs(opsRole, "ops-test-only") });
+    try {
+      await assert.rejects(ops.query("SELECT 1 FROM memory.namespaces"), (e: { code?: string }) => e.code === "42501");
+    } finally {
+      await ops.end();
+    }
+  });
+
+  test("a login without SET on the admin role is refused with the grant to run", async () => {
+    const stranger = new AdminClient(new pg.Pool({ connectionString: urlAs(strangerRole, "stranger-test-only") }));
+    try {
+      await refused(stranger.listNamespaces(), /cannot switch to engramport_admin/);
+    } finally {
+      await stranger.close();
+    }
+  });
+
+  test("namespaces are created top down with their level taken from the path", async () => {
+    assert.equal((await admin.createNamespace(city)).level, "city");
+    assert.equal((await admin.createNamespace(`${city}/tower`)).level, "tower");
+    const c = await admin.createNamespace(cell);
+    assert.deepEqual([c.level, c.path], ["cell", cell]);
+    await admin.createNamespace(`${city}/tower/cell-2`);
+    await refused(admin.createNamespace(cell), /already exists/);
+    await refused(admin.createNamespace(`${city}/missing/cell`), /create it first/);
+    assert.ok((await admin.listNamespaces()).some((n) => n.path === cell));
+  });
+
+  test("actors are created once and must be enabled to get a key", async () => {
+    await admin.createActor(`claude-${run}`, "agent", "Claude");
+    await admin.createActor(`grok-${run}`, "agent", "Grok Bot");
+    await refused(admin.createActor(`claude-${run}`, "agent", "Claude"), /already exists/);
+    await admin.setActorDisabled(`grok-${run}`, true);
+    await refused(admin.mintKey({ namespace: cell, actor: `grok-${run}` }), /disabled/);
+    await admin.setActorDisabled(`grok-${run}`, false);
+    await refused(admin.mintKey({ namespace: `${city}/nope`, actor: `grok-${run}` }), /no namespace/);
+    await refused(admin.mintKey({ namespace: cell, actor: "nobody-here" }), /no actor/);
+  });
+
+  test("a minted key works in its namespace only, and a read-only key cannot write", async () => {
+    const rw = await admin.mintKey({ namespace: cell, actor: `claude-${run}` });
+    assert.deepEqual(parseKey(rw.key)?.prefix, rw.prefix);
+    assert.ok(rw.key.startsWith(`${rw.prefix}.`));
+    const saved = await store.remember(rw.key, { content: "minted key writes here" });
+    assert.ok(saved);
+    await storeFails(store.remember(rw.key, { content: "x", namespace: `${city}/tower/cell-2` }), "forbidden");
+
+    const ro = await admin.mintKey({ namespace: cell, actor: `grok-${run}`, readOnly: true });
+    assert.deepEqual(ro.scopes, ["read"]);
+    await storeFails(store.remember(ro.key, { content: "should not land" }), "forbidden");
+    const found = await store.recall(ro.key, { query: "minted key writes", mode: "keyword" });
+    assert.ok(JSON.stringify(found).includes("minted key writes here"));
+  });
+
+  test("key listings never carry a hash or the secret half of a key", async () => {
+    const k = await admin.mintKey({ namespace: cell, actor: `claude-${run}`, expiresInMs: 3_600_000 });
+    const listed = await admin.listKeys({ namespace: cell });
+    const row = listed.find((r) => r.prefix === k.prefix);
+    assert.ok(row);
+    assert.ok(row.expires_at && row.expires_at.getTime() > Date.now());
+    const text = JSON.stringify(listed);
+    assert.ok(!text.includes(k.key.split(".")[1]));
+    assert.ok(!/key_hash/.test(text));
+  });
+
+  test("rotation keeps the old key alive for the grace period, or ends it at once", async () => {
+    const first = await admin.mintKey({ namespace: cell, actor: `claude-${run}` });
+    const { minted: second, old } = await admin.rotateKey(first.prefix, 3_600_000);
+    assert.ok(old.expires_at && old.expires_at.getTime() <= Date.now() + 3_600_000 + 5_000);
+    assert.equal(old.revoked_at, null);
+    assert.ok(await store.remember(first.key, { content: "old key still works during grace" }));
+    assert.ok(await store.remember(second.key, { content: "new key works" }));
+    assert.equal(second.namespace, cell);
+
+    const { minted: third, old: ended } = await admin.rotateKey(second.prefix, 0);
+    assert.ok(ended.revoked_at);
+    await storeFails(store.remember(second.key, { content: "x" }), "unauthorized");
+    assert.ok(await store.remember(third.key, { content: "third key works" }));
+    await refused(admin.rotateKey(second.prefix, 0), /revoked/);
+  });
+
+  test("rotating a key that expires soon renews its lifetime", async () => {
+    const k = await admin.mintKey({ namespace: cell, actor: `claude-${run}`, expiresInMs: 7 * 86_400_000 });
+    const { minted } = await admin.rotateKey(k.prefix, 0);
+    const life = minted.expires_at!.getTime() - Date.now();
+    assert.ok(life > 6.9 * 86_400_000 && life <= 7 * 86_400_000 + 5_000);
+  });
+
+  test("revoking stops the key on its next request and cannot be undone", async () => {
+    const k = await admin.mintKey({ namespace: cell, actor: `claude-${run}` });
+    assert.ok(await store.remember(k.key, { content: "before revoke" }));
+    const revoked = await admin.revokeKey(k.prefix);
+    assert.ok(revoked.revoked_at);
+    await storeFails(store.remember(k.key, { content: "after revoke" }), "unauthorized");
+    await refused(admin.revokeKey(k.prefix), /already revoked/);
+    await refused(admin.revokeKey("ep_live_000000000000"), /no key/);
+    const listed = await admin.listKeys({ namespace: cell });
+    assert.ok(!listed.some((r) => r.prefix === k.prefix), "revoked keys are hidden by default");
+    assert.ok((await admin.listKeys({ namespace: cell, includeInactive: true })).some((r) => r.prefix === k.prefix));
+  });
+
+  test("disabling an actor stops all of its keys, and enabling brings them back", async () => {
+    const k = await admin.mintKey({ namespace: cell, actor: `grok-${run}` });
+    await admin.setActorDisabled(`grok-${run}`, true);
+    await storeFails(store.recall(k.key, { query: "anything", mode: "keyword" }), "unauthorized");
+    await admin.setActorDisabled(`grok-${run}`, false);
+    assert.ok(await store.recall(k.key, { query: "anything", mode: "keyword" }));
+  });
+
+  test("the command line prints a minted key alone on stdout", async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const io = { out: (l: string) => out.push(l), err: (l: string) => err.push(l) };
+    const opsUrl = urlAs(opsRole, "ops-test-only");
+    const open = () => new AdminClient(new pg.Pool({ connectionString: opsUrl }), pepper);
+    const code = await runAdmin(["key", "mint", "--namespace", cell, "--actor", `claude-${run}`, "--expires-in", "30d"], open, io);
+    assert.equal(code, 0, err.join("\n"));
+    assert.equal(out.length, 1);
+    assert.ok(parseKey(out[0]), "stdout is exactly one key");
+    const cliKey = out[0];
+    assert.match(err.join("\n"), /shown once/);
+    assert.ok(await store.remember(out[0], { content: "cli key works" }));
+
+    out.length = 0;
+    assert.equal(await runAdmin(["key", "list", "--namespace", cell], open, io), 0);
+    assert.ok(out.some((l) => l.startsWith(parseKey(cliKey)!.prefix)));
+    assert.ok(out.every((l) => !l.includes(cliKey.split(".")[1])), "listings never show the secret half");
+
+    assert.equal(await runAdmin(["key", "mint", "--namespace", cell, "--actor", "nobody-here"], open, io), 1);
+  });
+});

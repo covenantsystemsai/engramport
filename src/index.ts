@@ -15,17 +15,11 @@
  *   ENGRAMPORT_MODE=http   npx engramport   # Remote bots
  */
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import express, { Request, Response } from "express";
-import cors from "cors";
 
 import { config, validateConfig } from "./config.js";
-import { toolDefinitions, executeTool } from "./tools/index.js";
+import { createMcpServer, VERSION } from "./server.js";
+import { createHttpApp } from "./http.js";
 import { prewarmToken } from "./auth.js";
 
 // CLI: `node dist/index.js prewarm` mints an OIDC token in this process and
@@ -47,28 +41,6 @@ if (process.argv[2] === "prewarm") {
 validateConfig();
 
 // ═══════════════════════════════════════════════════════════
-// MCP Server (shared between stdio and HTTP)
-// ═══════════════════════════════════════════════════════════
-
-// Single-source the version so the three previously-hardcoded copies can't drift
-// from package.json again. Bump alongside package.json on release.
-const VERSION = "2.2.1";
-
-const mcpServer = new Server(
-  { name: "engramport", version: VERSION },
-  { capabilities: { tools: {} } },
-);
-
-mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: toolDefinitions,
-}));
-
-mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-  return executeTool(name, (args as Record<string, unknown>) || {});
-});
-
-// ═══════════════════════════════════════════════════════════
 // HTTP Server (for remote bots)
 // ═══════════════════════════════════════════════════════════
 
@@ -78,96 +50,7 @@ function startHTTP() {
   process.on("unhandledRejection", (reason) => console.error("[engramport] unhandledRejection:", reason));
   process.on("uncaughtException", (err) => console.error("[engramport] uncaughtException:", err));
 
-  const app = express();
-  app.use(cors());
-  app.use(express.json({ limit: "10mb" }));
-
-  // Health
-  app.get("/health", (_req: Request, res: Response) => {
-    res.json({
-      service: "engramport",
-      version: VERSION,
-      eidetic_api: config.apiUrl,
-      namespace: config.namespace,
-      tools: toolDefinitions.length,
-    });
-  });
-
-  // List tools
-  app.get("/tools", (_req: Request, res: Response) => {
-    res.json({ tools: toolDefinitions });
-  });
-
-  // ── Simple REST: POST /remember, /recall, /chat, etc. ──
-  // Any bot can call these with a JSON body — no MCP protocol needed.
-  for (const tool of toolDefinitions) {
-    app.post(`/${tool.name}`, async (req: Request, res: Response) => {
-      const result = await executeTool(tool.name, req.body || {});
-      const status = result.isError ? 500 : 200;
-      try {
-        res.status(status).json(JSON.parse(result.content[0].text));
-      } catch {
-        res.status(status).json({ raw: result.content[0].text });
-      }
-    });
-  }
-
-  // ── MCP JSON-RPC: POST /mcp ──
-  // For MCP-aware clients that speak JSON-RPC 2.0.
-  app.post("/mcp", async (req: Request, res: Response) => {
-    // Guard a bodyless / non-JSON POST: without this the destructure throws a
-    // TypeError in an async Express-4 handler -> unhandled rejection -> process exit.
-    if (!req.body || typeof req.body !== "object") {
-      res.status(400).json({
-        jsonrpc: "2.0",
-        error: { code: -32700, message: "Parse error: a JSON body is required (set Content-Type: application/json)" },
-        id: null,
-      });
-      return;
-    }
-    const { jsonrpc, method, params, id } = req.body;
-
-    if (jsonrpc !== "2.0") {
-      res.status(400).json({
-        jsonrpc: "2.0",
-        error: { code: -32600, message: "Invalid JSON-RPC version" },
-        id,
-      });
-      return;
-    }
-
-    if (method === "tools/list") {
-      res.json({ jsonrpc: "2.0", result: { tools: toolDefinitions }, id });
-      return;
-    }
-
-    if (method === "tools/call") {
-      const { name, arguments: args } = params || {};
-      const result = await executeTool(name, args || {});
-      res.json({ jsonrpc: "2.0", result, id });
-      return;
-    }
-
-    res.json({
-      jsonrpc: "2.0",
-      error: { code: -32601, message: `Unknown method: ${method}` },
-      id,
-    });
-  });
-
-  // ── SSE: GET /stream ──
-  // Persistent connection for real-time bots.
-  app.get("/stream", (req: Request, res: Response) => {
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-
-    res.write(`data: ${JSON.stringify({ type: "connected", namespace: config.namespace, tools: toolDefinitions.map(t => t.name) })}\n\n`);
-
-    const keepAlive = setInterval(() => res.write(": keepalive\n\n"), 30000);
-    req.on("close", () => clearInterval(keepAlive));
-  });
+  const app = createHttpApp({ apiUrl: config.apiUrl, namespace: config.namespace });
 
   app.listen(config.port, "0.0.0.0", () => {
     // Banner to STDERR unconditionally. stdout is reserved for protocol output
@@ -176,7 +59,7 @@ function startHTTP() {
     // documented install steps got auto-defaulted to http mode.
     console.error(`
 ┌──────────────────────────────────────────────────────┐
-│              ENGRAMPORT v2.2.1                       │
+│              ENGRAMPORT v${VERSION.padEnd(28)}│
 │              Give any bot a brain.                   │
 ├──────────────────────────────────────────────────────┤
 │  Eidetic API:  ${config.apiUrl.padEnd(37)}│
@@ -197,7 +80,7 @@ function startHTTP() {
 │    POST /export_graph    — Export the graph          │
 │                                                      │
 │  MCP (Claude/agents):                                │
-│    POST /mcp        — JSON-RPC 2.0                   │
+│    POST /mcp        — MCP streamable HTTP            │
 │    GET  /stream     — SSE persistent connection      │
 │    GET  /tools      — List available tools            │
 └──────────────────────────────────────────────────────┘
@@ -211,7 +94,7 @@ function startHTTP() {
 
 if (config.mode === "stdio") {
   const transport = new StdioServerTransport();
-  mcpServer.connect(transport).then(() => {
+  createMcpServer().connect(transport).then(() => {
     console.error("[EngramPort] Running in stdio mode (Claude Desktop)");
   });
 } else {

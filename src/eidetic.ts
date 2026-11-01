@@ -7,11 +7,12 @@
 
 import { config } from "./config.js";
 import { getIdToken } from "./auth.js";
+import { backendKey } from "./caller.js";
 
 async function request(method: string, path: string, body?: unknown): Promise<unknown> {
   const url = `${config.apiUrl}${path}`;
   const headers: Record<string, string> = {
-    "X-API-Key": config.apiKey,
+    "X-API-Key": backendKey(config.apiKey),
     "Content-Type": "application/json",
   };
 

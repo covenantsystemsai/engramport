@@ -1,0 +1,3 @@
+# A fake test key (not a real credential) committed in test/doctor.test.ts
+# before the fixture was changed to a runtime-built placeholder.
+24eef2b03efeafd29332e4afe15c1e6daf84df6f:test/doctor.test.ts:generic-api-key:9

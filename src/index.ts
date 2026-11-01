@@ -21,6 +21,7 @@ import { config, validateConfig } from "./config.js";
 import { createMcpServer, VERSION } from "./server.js";
 import { createHttpApp } from "./http.js";
 import { setCallerRequired } from "./caller.js";
+import { runDoctor } from "./doctor.js";
 import { prewarmToken } from "./auth.js";
 
 // CLI: `node dist/index.js prewarm` mints an OIDC token in this process and
@@ -37,6 +38,13 @@ if (process.argv[2] === "prewarm") {
     process.stderr.write(`prewarm crashed: ${String(err)}\n`);
     process.exit(2);
   }
+}
+
+// CLI: `engramport doctor` prints the resolved settings (key prefix only) and
+// checks that the API answers, then exits. Runs before validateConfig so it
+// can report a broken setup instead of refusing to start.
+if (process.argv[2] === "doctor") {
+  process.exit(await runDoctor(config));
 }
 
 validateConfig(config.mode);

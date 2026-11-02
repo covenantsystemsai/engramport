@@ -2,7 +2,8 @@
  * Tool calls served by the Postgres store (ENGRAMPORT_STORE=postgres).
  *
  * remember, recall, upload, fetch_memory, delete_memory (which retracts),
- * list_namespaces and inspect run against the memory schema. chat, groom,
+ * list_namespaces and inspect run against the memory schema, and so do the
+ * graph tools link, unlink and get_entity. chat, groom,
  * dream and export_graph need the graph and synthesis work that comes in later
  * PRs, so they answer with a clear error instead of reaching the old backend.
  */
@@ -11,6 +12,7 @@ import { config } from "../config.js";
 import { backendKey } from "../caller.js";
 import { openAIEmbedder } from "../embeddings.js";
 import { decodePepper } from "../keys.js";
+import type { LinkInput } from "../store/graph.js";
 import { createPool, MEMORY_KINDS, MemoryKind, PostgresStore, StoreError } from "../store/postgres.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
@@ -114,6 +116,37 @@ export async function executeStoreTool(
         return ok(await store.listNamespaces(key));
       case "inspect":
         return ok(await store.inspect(key, namespace));
+      case "link": {
+        const arr = (v: unknown, what: string): unknown[] | undefined => {
+          if (v === undefined || v === null) return undefined;
+          if (!Array.isArray(v)) throw new StoreError("invalid", `${what} must be an array`);
+          return v;
+        };
+        return ok(await store.link(key, {
+          entities: arr(args.entities, "entities") as LinkInput["entities"],
+          relations: arr(args.relations, "relations") as LinkInput["relations"],
+          memoryId: str(args.memory_id),
+          memoryLinks: arr(args.memory_links, "memory_links") as LinkInput["memoryLinks"],
+          namespace,
+        }));
+      }
+      case "unlink": {
+        const given = (["relation_id", "memory_link_id", "entity_id"] as const).filter((k) => str(args[k]));
+        if (given.length !== 1) throw new StoreError("invalid", "give exactly one of relation_id, memory_link_id or entity_id");
+        const id = str(args[given[0]])!;
+        const target = given[0] === "relation_id" ? { relationId: id }
+          : given[0] === "memory_link_id" ? { memoryLinkId: id } : { entityId: id };
+        return ok(await store.unlink(key, target, namespace));
+      }
+      case "get_entity":
+        if (!str(args.entity_id) && !str(args.name)) throw new StoreError("invalid", "give entity_id or name");
+        return ok(await store.getEntity(key, {
+          id: str(args.entity_id),
+          name: str(args.name),
+          type: str(args.type),
+          memoryLimit: num(args.memory_limit),
+          namespace,
+        }));
       default:
         if (NOT_YET.has(name)) return fail(`${name} is not available on the Postgres store yet`, "not_available");
         return fail(`Unknown tool: ${name}`, "invalid");

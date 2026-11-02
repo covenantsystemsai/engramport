@@ -132,7 +132,7 @@ Set `ENGRAMPORT_STORE=postgres` and the server reads and writes the memory schem
 | `ENGRAMPORT_KEY_PEPPER` | postgres | At least 32 random bytes, base64 or hex, used to hash keys. |
 | `OPENAI_API_KEY` | no | Turns on embeddings and vector recall. Without it, recall uses keyword search. |
 
-Keep all of these in a secrets manager, never in a file in the repo. On this store `delete_memory` retracts: the memory stops coming back from recall but its text is kept for the record. `chat`, `groom`, `dream` and `export_graph` are not available on it yet.
+Keep all of these in a secrets manager, never in a file in the repo. On this store `delete_memory` retracts: the memory stops coming back from recall but its text is kept for the record. `chat`, `groom`, `dream` and `export_graph` are not available on it yet. It also adds three knowledge-graph tools: `link` (assert entities, aliases, relations, which entities a memory mentions, and links between memories), `unlink` (retract one of them) and `get_entity` (an entity with its aliases, relations and the memories that mention it). They follow the same namespace rules as memories.
 
 #### Managing namespaces and keys
 

@@ -113,7 +113,7 @@ SELECT id AS ta_prov FROM memory.provenance WHERE namespace_id = :'ta' \gset
 \echo '-- schema shape'
 SELECT t.expect_count('every memory table has row security on and forced',
   $$SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'memory' AND c.relkind = 'r' AND c.relrowsecurity AND c.relforcerowsecurity$$, 6);
+    WHERE n.nspname = 'memory' AND c.relkind = 'r' AND NOT (c.relrowsecurity AND c.relforcerowsecurity)$$, 0);
 SELECT t.expect_count('the app role cannot bypass row security',
   $$SELECT 1 FROM pg_roles WHERE rolname = 'engramport_app' AND NOT rolbypassrls AND NOT rolsuper$$, 1);
 SELECT t.expect_denied('a cell cannot sit under a city',

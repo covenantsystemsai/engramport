@@ -143,6 +143,7 @@ engramport admin namespace create acme                # a city
 engramport admin namespace create acme/ops            # a tower
 engramport admin namespace create acme/ops/pilot      # a cell
 engramport admin namespace create mycompany --company # your own company's city, once
+engramport admin namespace create mycompany/knowledge
 engramport admin namespace create mycompany/knowledge/hq
 engramport admin actor create claude --kind agent --display "Claude"
 engramport admin key mint --namespace acme/ops/pilot --actor claude --expires-in 90d

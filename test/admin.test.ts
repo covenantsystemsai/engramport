@@ -56,3 +56,11 @@ test("a bad namespace path is refused before any database work", async () => {
   assert.equal(await runAdmin(["namespace", "create", "City/Tower"], noDb, c.io), 1);
   assert.equal(await runAdmin(["namespace", "create", "a/b/c/d"], noDb, c.io), 1);
 });
+
+test("--company goes on a city only, refused before any database work", async () => {
+  for (const path of ["city/tower", "city/tower/cell"]) {
+    const c = capture();
+    assert.equal(await runAdmin(["namespace", "create", path, "--company"], noDb, c.io), 2, path);
+    assert.match(c.err.join("\n"), /--company goes on a city/);
+  }
+});

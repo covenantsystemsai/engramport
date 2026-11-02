@@ -19,7 +19,8 @@ SELECT t.expect_count('every graph table has row security on and forced',
       ('entities', 'entity_aliases', 'relations', 'entity_mentions', 'memory_links')
       AND c.relrowsecurity AND c.relforcerowsecurity$$, 5);
 SELECT t.expect_count('names normalize the same way however they are typed',
-  $$SELECT 1 WHERE memory.norm_key('  Grok   BOT ') = 'grok bot' AND memory.norm_key('ＡＮ２Ｂ') = 'an2b'$$, 1);
+  $$SELECT 1 WHERE memory.norm_key('  Grok   BOT ') = 'grok bot' AND memory.norm_key('ＡＮ２Ｂ') = 'an2b'
+    AND memory.norm_key(E'\tGrok Bot\n') = 'grok bot'$$, 1);
 
 -- Fixtures written through the app role: an entity and a memory in tower a,
 -- and one each in cell 2, so cell 1 has something it may and may not reach.

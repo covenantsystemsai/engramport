@@ -17,7 +17,9 @@
 -- One normal form for names and aliases, so "Grok  Bot" and "grok bot" match.
 CREATE FUNCTION memory.norm_key(p text) RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path = pg_catalog AS $$
-  SELECT lower(regexp_replace(btrim(normalize(p, NFKC)), '\s+', ' ', 'g'))
+  -- Collapse every run of whitespace (tabs and newlines too) to one space
+  -- first, then trim, since btrim alone strips only plain spaces.
+  SELECT lower(btrim(regexp_replace(normalize(p, NFKC), '\s+', ' ', 'g')))
 $$;
 
 CREATE TYPE memory.graph_status AS ENUM ('active', 'retracted');

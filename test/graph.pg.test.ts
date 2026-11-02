@@ -206,6 +206,16 @@ describe("knowledge graph", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABAS
     assert.equal(b.relations.length, 0, "relations to a retracted entity stop coming back");
   });
 
+  test("names with tabs or newlines around them match on every call", async () => {
+    const first = await store.link(keys.cell1, { entities: [{ name: "\tTabbed Bot\n", type: "agent", aliases: ["\tTB "] }] });
+    const again = await store.link(keys.cell1, { entities: [{ name: "\tTabbed Bot\n", type: "agent" }] });
+    assert.equal(again.entities[0].id, first.entities[0].id);
+    assert.equal(again.entities[0].matched_by, "name");
+    const byAlias = await store.getEntity(keys.cell1, { name: "\ttb\t", type: "agent" });
+    assert.ok("entity" in byAlias);
+    assert.equal(byAlias.entity.id, first.entities[0].id);
+  });
+
   test("a name shared by two types is reported as ambiguous", async () => {
     await store.link(keys.cell1, { entities: [{ name: "Mercury", type: "planet" }, { name: "Mercury", type: "bank" }] });
     const r = await store.getEntity(keys.cell1, { name: "mercury" });

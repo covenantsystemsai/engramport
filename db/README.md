@@ -8,7 +8,7 @@ SQL migrations for EngramPort's memory store on Supabase Postgres.
 - `migrate.sh`: applies new files to `$DATABASE_URL` and records each file's
   SHA-256 in `engramport_meta.schema_migrations`. A changed file stops the run.
 - `test/run.sh`: applies everything to a throwaway database and runs
-  `test/rls_test.sql` and `test/admin_test.sql`. CI runs it on every pull request.
+  `test/rls_test.sql`, `test/admin_test.sql` and `test/index_test.sql`. CI runs it on every pull request.
 
 Applying to a real project needs the owner's yes first.
 

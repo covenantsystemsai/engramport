@@ -8,7 +8,8 @@ SQL migrations for EngramPort's memory store on Supabase Postgres.
 - `migrate.sh`: applies new files to `$DATABASE_URL` and records each file's
   SHA-256 in `engramport_meta.schema_migrations`. A changed file stops the run.
 - `test/run.sh`: applies everything to a throwaway database and runs
-  `test/rls_test.sql`, `test/admin_test.sql` and `test/index_test.sql`. CI runs it on every pull request.
+  `test/rls_test.sql`, `test/admin_test.sql`, `test/graph_test.sql` and
+  `test/index_test.sql`. CI runs it on every pull request.
 
 Applying to a real project needs the owner's yes first.
 
@@ -49,6 +50,27 @@ Applying to a real project needs the owner's yes first.
 - A trigger on `api_keys` stops anyone, the owner included, from changing a
   key's namespace, actor, prefix, hash or scopes, or restoring a revoked key.
   To change scopes, rotate.
+
+## Knowledge graph (0004)
+
+- `entities` (a type such as `person` or `project`, a name and an optional
+  description), `entity_aliases`, `relations` (source, predicate, target,
+  confidence and optional evidence from a memory), `entity_mentions` (which
+  memories mention which entities) and `memory_links` (memory to memory:
+  supports, contradicts, derived_from, synthesizes, related).
+- The same walls as memories: every row sits in the writer's own namespace and
+  is read down the tree only. A row may point at something the writer can
+  read, so a cell can relate its project to a tower concept, but the row stays
+  in the cell and the tower never sees it. Every uniqueness rule includes the
+  namespace, so a write never collides with a row its writer can't see.
+- Names match after `memory.norm_key` (case, spacing and Unicode width), which
+  a trigger computes; the caller can't supply it.
+- Every graph write carries a provenance row of the writer's own key, made with
+  `memory.record_provenance(...)`. Only the `job` transport may label a row
+  `extracted`, so an agent can't pass its claims off as the extractor's.
+- Rows are never edited or deleted. Entities, relations and links can move
+  from active to retracted once, for every role, the owner included. The
+  admin role gets no access: the graph is client data.
 
 ## Run the tests locally
 

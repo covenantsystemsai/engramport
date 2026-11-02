@@ -25,4 +25,5 @@ DATABASE_URL="$DATABASE_URL" "$here/../migrate.sh"
 
 psql_ -o /dev/null -f "$here/rls_test.sql"
 psql_ -o /dev/null -f "$here/admin_test.sql"
+psql_ -o /dev/null -f "$here/graph_test.sql"
 psql_ -o /dev/null -f "$here/index_test.sql"

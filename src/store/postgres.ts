@@ -20,6 +20,7 @@ import pg from "pg";
 import { chunkText } from "../chunk.js";
 import { Embedder, vectorLiteral } from "../embeddings.js";
 import { hashKey, parseKey } from "../keys.js";
+import { getEntityTx, GetEntityInput, LinkInput, linkTx, UnlinkTarget, unlinkTx } from "./graph.js";
 
 export type MemoryKind =
   | "fact" | "decision" | "note" | "summary" | "insight" | "principle" | "hypothesis" | "document_chunk";
@@ -558,6 +559,32 @@ export class PostgresStore {
           memories: Number(n.memories),
         })),
       };
+    });
+  }
+
+  /** Assert entities, relations, mentions and memory links in the key's namespace. */
+  async link(rawKey: string, input: LinkInput) {
+    return this.withKey(rawKey, async (c, ctx) => {
+      PostgresStore.checkNamespace(ctx, input.namespace);
+      PostgresStore.requireWrite(ctx);
+      return linkTx(c, ctx, this.opts.transport, input);
+    });
+  }
+
+  /** Retract one relation, memory link or entity in the key's own namespace. */
+  async unlink(rawKey: string, target: UnlinkTarget, namespace?: string) {
+    return this.withKey(rawKey, async (c, ctx) => {
+      PostgresStore.checkNamespace(ctx, namespace);
+      PostgresStore.requireWrite(ctx);
+      return unlinkTx(c, ctx, target);
+    });
+  }
+
+  /** One entity the key can read, with aliases, relations and the memories that mention it. */
+  async getEntity(rawKey: string, input: GetEntityInput & { namespace?: string }) {
+    return this.withKey(rawKey, async (c, ctx) => {
+      PostgresStore.checkNamespace(ctx, input.namespace);
+      return getEntityTx(c, ctx, input);
     });
   }
 

@@ -106,3 +106,15 @@ test("one log line per request, with no key, body or query string", async () => 
     assert.ok(!lines[0].includes(leak), `log line leaks ${leak}`);
   }
 });
+
+test("a CORS preflight gets an id and a log line too", async () => {
+  logs.length = 0;
+  const res = await fetch(`${base}/mcp`, {
+    method: "OPTIONS",
+    headers: { "X-Request-Id": "preflight-0001", Origin: "https://example.test", "Access-Control-Request-Method": "POST" },
+  });
+  assert.equal(res.status, 204);
+  assert.equal(res.headers.get("x-request-id"), "preflight-0001");
+  await new Promise((r) => setImmediate(r));
+  assert.equal(logs.filter((l) => l.includes("preflight-0001")).length, 1);
+});

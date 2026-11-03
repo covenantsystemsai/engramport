@@ -51,8 +51,6 @@ export function createHttpApp(opts: HttpAppOptions): express.Express {
   const app = express();
   // One proxy hop (Cloud Run's front end) sets the client address used by rate limits.
   app.set("trust proxy", 1);
-  app.use(cors({ exposedHeaders: ["Mcp-Session-Id", "WWW-Authenticate", "X-Request-Id"] }));
-
   // Every request gets an id, returned as X-Request-Id and stored with any
   // write it makes. One log line per request carries the id, method, route,
   // status and time taken: never the key, the body, the query string or any
@@ -75,6 +73,9 @@ export function createHttpApp(opts: HttpAppOptions): express.Express {
     });
     next();
   });
+  // After the id, so a CORS preflight, which cors() answers itself, still
+  // gets one and a log line.
+  app.use(cors({ exposedHeaders: ["Mcp-Session-Id", "WWW-Authenticate", "X-Request-Id"] }));
   app.use(express.json({ limit: "10mb" }));
 
   // Health stays open for uptime checks, so it says nothing about the backend

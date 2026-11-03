@@ -210,6 +210,10 @@ ENGRAMPORT_TEST_DATABASE_URL=postgresql://postgres@localhost:5432/store_test npm
   `embeddings_write` policy is the second check: it accepts an embedding only
   when its model and size are the namespace's own, so even a server bug
   can't store an OpenAI vector for a gte-small namespace.
+- `embeddings_read` (0012) shows a key only the embeddings made under their
+  namespace's current model. After a tower or cell changes model, its old
+  vectors stay stored but no key, its own or a cell's below it, can search
+  them by meaning until they are made again.
 - `memory_embeddings.embedding` has no fixed size. Each size has its own HNSW
   index over a cast to that size, and `memory.search` and
   `memory.vector_search` cast the same way, so a query is only ever compared

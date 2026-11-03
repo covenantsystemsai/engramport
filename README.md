@@ -171,6 +171,8 @@ engramport admin key revoke ep_live_XXXXXXXXXXXX
 engramport admin audit --namespace acme --since 7d   # who wrote what, where and when
 ```
 
+In hosted mode every response carries an `X-Request-Id`. A client may send its own (8 to 128 letters, digits, `.`, `_`, `:` or `-`); anything else is replaced with a random id. The id is stored with the provenance of every write the request makes and shows in the audit trail and in a memory's `provenance`, so a write can be traced to one request. The server logs one line per request with that id, the method, the path, the status and the time taken, and never the key, the body, the query string or any memory text.
+
 People who connect a client such as claude.ai sign in with Google instead of pasting a key (migration 0009). You decide who may, one Google account, namespace and actor at a time:
 
 ```bash

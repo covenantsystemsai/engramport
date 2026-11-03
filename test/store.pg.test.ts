@@ -14,6 +14,7 @@ import pg from "pg";
 
 import { Embedder, EMBEDDING_DIMENSION } from "../src/embeddings.ts";
 import { hashKey, mintKey } from "../src/keys.ts";
+import { runAsCaller } from "../src/caller.ts";
 import { PostgresStore, StoreError } from "../src/store/postgres.ts";
 import { executeStoreTool } from "../src/tools/store.ts";
 
@@ -152,6 +153,26 @@ describe("postgres store", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
     assert.equal(f.memory.provenance?.transport, "streamable_http");
     assert.equal(f.memory.provenance?.source_kind, "url");
     assert.deepEqual(f.memory.metadata, { topic: "billing" });
+  });
+
+  test("a write made during an HTTP request records that request's id in its provenance", async () => {
+    const rid = `req-${run}-remember`;
+    const r = await runAsCaller({ apiKey: keys.cell1, requestId: rid }, () =>
+      store.remember(keys.cell1, { content: `Request id check ${run}`, kind: "note" }),
+    );
+    const f = await store.fetch(keys.cell1, r.id);
+    assert.equal(f.memory.provenance?.request_id, rid);
+
+    const linkRid = `req-${run}-link`;
+    await runAsCaller({ apiKey: keys.cell1, requestId: linkRid }, () =>
+      store.link(keys.cell1, { entities: [{ name: `Request id entity ${run}`, type: "topic" }], memoryId: r.id }),
+    );
+    const prov = await admin.query("SELECT tool, request_id FROM memory.provenance WHERE request_id = $1", [linkRid]);
+    assert.deepEqual(prov.rows, [{ tool: "link", request_id: linkRid }]);
+
+    // Outside a request (stdio, jobs) there is no id, and none is made up.
+    const plain = await store.remember(keys.cell1, { content: `No request id ${run}`, kind: "note" });
+    assert.equal((await store.fetch(keys.cell1, plain.id)).memory.provenance?.request_id, null);
   });
 
   test("vector recall reads down the tree and never across", async () => {

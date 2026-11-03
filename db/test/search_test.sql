@@ -140,3 +140,15 @@ SELECT t.expect_count('no API role and not the admin role can run it',
     WHERE has_function_privilege(r, p.oid, 'EXECUTE')$$, 0);
 
 \echo 'all search tests passed'
+
+\echo '-- keyword candidates are chosen by coverage, not raw rank (0013)'
+SET ROLE engramport_app;
+BEGIN; SELECT t.as_key(:'k_c3', :'c3');
+SELECT count(memory.remember('fact', repeat('quokka ', 10) || 'decoy ' || g, 'remember', 'rest')) FROM generate_series(1, 45) g \gset
+SELECT memory.remember('fact', 'quokka harbour lantern ledger', 'remember', 'rest') AS full_mem \gset
+SELECT t.expect_count('a memory with every query word is found past forty that repeat one',
+  format($$SELECT 1 FROM (SELECT s.memory_id, row_number() OVER () AS pos
+                          FROM memory.search('quokka harbour lantern ledger', p_retrievers => ARRAY['keyword'], p_limit => 5) s) r
+           WHERE r.memory_id = %L AND r.pos = 1$$, :'full_mem'), 1);
+ROLLBACK;
+RESET ROLE;

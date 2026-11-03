@@ -2,8 +2,9 @@
  * Retrieval benchmark for Supabase's built-in embedding model, gte-small.
  *
  * Seeds a throwaway namespace tree with test/fixtures/eval-basic.json, then
- * asks both its tuned questions and the held-out ones in
- * test/fixtures/eval-heldout.json through the same recall an agent uses, and
+ * asks its tuned questions, the held-out ones in test/fixtures/eval-heldout.json
+ * and the fresh ones in test/fixtures/eval-fresh.json (written after hybrid was
+ * tuned, never tuned on) through the same recall an agent uses, and
  * reports recall@1, recall@3, recall@5 and MRR for each retriever:
  *
  *   keyword                   full-text only
@@ -53,6 +54,7 @@ interface Fixture {
 }
 const basic = JSON.parse(readFileSync("test/fixtures/eval-basic.json", "utf8")) as Fixture;
 const heldout = JSON.parse(readFileSync("test/fixtures/eval-heldout.json", "utf8")) as Pick<Fixture, "questions">;
+const fresh = JSON.parse(readFileSync("test/fixtures/eval-fresh.json", "utf8")) as Pick<Fixture, "questions">;
 
 /** An embedder that times each call, so query latency can be reported. */
 type Timed = Embedder & { lastMs: number };
@@ -166,7 +168,7 @@ async function main(): Promise<void> {
     })),
   });
 
-  const sets = { tuned: basic.questions, "held-out": heldout.questions };
+  const sets = { tuned: basic.questions, "held-out": heldout.questions, fresh: fresh.questions };
   const retrievers: Array<{ name: string; store: PostgresStore; mode: RecallMode; embeds: boolean }> = [
     { name: "keyword", store: noModel, mode: "keyword", embeds: false },
     { name: "graph", store: noModel, mode: "graph", embeds: false },

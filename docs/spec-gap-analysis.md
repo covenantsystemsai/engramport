@@ -360,29 +360,30 @@ Small PRs, in order. Phase 1 items that touch a live system each wait for their 
 2. Hide evidence spans and graph hits from non-active memories, with tests (risk 2).
 3. Correct the tool descriptions for the Postgres store, map REST errors to 400, 403, 404 and 503, and refuse hosted start without an explicit store.
 4. Correlation ids into provenance and logs, and a structured log line per request with no content.
-5. Deploy config and an env template, as files only (held earlier).
-6. Phase 1, live, each on its own yes:
+5. A per-cell write policy that refuses what the pilot cell must never hold (see "First pilot cell").
+6. Deploy config and an env template, as files only (held earlier).
+7. Phase 1, live, each on its own yes:
    - apply 0002–0009 to a development project
    - sign in from claude.ai, and from ChatGPT where the plan allows
    - record which tools each client lists and calls
-7. Migration 0010: the epistemic and temporal columns, `memory_events` and `memory_evidence`.
-8. `memory_supersede` with expected versions, and idempotency keys apart from `dedup_key`.
-9. `memory_get` and `memory_history`.
-10. Typed `remember` (the 16 types, validation, evidence, assertion) and new link kinds.
-11. `memory_context` and `recall`'s new filters.
-12. `memory_feedback`.
-13. The eval expansion:
+8. Migration 0010: the epistemic and temporal columns, `memory_events` and `memory_evidence`.
+9. `memory_supersede` with expected versions, and idempotency keys apart from `dedup_key`.
+10. `memory.erase` across derived rows, a per-cell export, and a documented backup window. This waits on the deletion decision below.
+11. `memory_get` and `memory_history`.
+12. Typed `remember` (the 16 types, validation, evidence, assertion) and new link kinds.
+13. `memory_context` and `recall`'s new filters.
+14. `memory_feedback`.
+15. The eval expansion:
     - a held-out set labelled by query type
     - nDCG, leakage, temporal correctness, latency and cost
     - a run with the real embedding model, reported as measured
-14. `memory_timeline`, `memory_find_conflicts` and `memory_graph_neighbors`.
-15. `memory_prepare_handoff`.
-16. `memory.erase` across derived rows, export, and a documented backup window.
-17. Promotion proposals.
-18. Metrics.
-19. The rest of the documentation set.
+16. `memory_timeline`, `memory_find_conflicts` and `memory_graph_neighbors`.
+17. `memory_prepare_handoff`.
+18. Promotion proposals.
+19. Metrics.
+20. The rest of the documentation set.
 
-Items 2 to 4 are small and can go before the pilot with no product decision.
+Items 2 to 5 are small and can go before the pilot with no product decision. Supersession (9) and erase and export (10) moved up on the pilot cell's requirements.
 
 ## Test plan
 
@@ -409,6 +410,39 @@ Each PR adds its own tests in the existing suites. Beyond those:
 
   Only a box ticked in the real client counts.
 
+## First pilot cell
+
+The pilot cell's owner set what it should hold, on 2026-11-03.
+
+**Remember first:**
+
+| What | Type it maps to | What it needs that isn't built |
+|---|---|---|
+| Meeting decisions, linked to their source | decision | `memory_evidence` pointing at the meeting record, not the transcript itself |
+| Where things stand | observation, with `valid_from` | supersession with versions, so the current status is the one active record |
+| The owner's preferences | fact today; a preference type, or a `requirement`, later | nothing beyond types |
+| Team roles | entities and relations | nothing; `link` covers it |
+| Transactions | operational outcome, or a new transaction type | a rule for which details stay out (below) |
+| Local rules | requirement | nothing beyond types |
+
+**Never stored:** secrets, clients' personal details, raw transcripts, and any other client's data.
+
+Isolation already keeps other cells' data out of reach. But nothing stops an agent with this cell's key from writing any of these into it. So the plan adds a per-cell write policy (build item 5), enforced by the server on `remember`, `upload` and `link`:
+
+- refuse text that matches known secret formats: API keys, tokens, private keys and connection strings
+- refuse a `source_kind` of transcript, and `upload` of a whole transcript
+- state the cell's rules in the tool's answer, so agents see them
+
+Personal details can't be detected reliably by patterns. So the policy reduces the risk, and the agents' instructions and the owner's review carry the rest. The policy will say so, not claim more. Its tests are refusal tests, in the trust suite.
+
+**A logged approval never counts as a person's yes.** This matches the evidence model: an approval in memory is a record that someone approved something, with who and when. It is never permission for an agent to act.
+
+- Recall, `memory_get` and the handoff will label approval records as history, with the approver's identity.
+- Tool descriptions will say plainly that a stored approval authorizes nothing.
+- A trust test will check that no tool treats one as authorization.
+
+**Superseded decisions are marked, and the owner can export or delete.** Both moved up the build sequence: supersession to item 9, erase and export to item 10. Export covers the cell's memories, their provenance and graph rows, in a documented format. Delete waits on the deletion decision.
+
 ## Effect on the pilot
 
 Against the §22 acceptance criteria today:
@@ -432,10 +466,10 @@ Against the §22 acceptance criteria today:
 
 A first pilot that stores and recalls cell memories across two clients needs:
 
-- build items 2 to 6
+- build items 2 to 7
 - a decision on risk 1
 
-A pilot that meets all of §22 also needs items 7 to 10 and 13 to 15.
+Meeting the pilot cell's own requirements also needs items 8 to 10. Meeting all of §22 needs items 11 to 13 and 15 to 17 as well.
 
 ## Decisions needed
 

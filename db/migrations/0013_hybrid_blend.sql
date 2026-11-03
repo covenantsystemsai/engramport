@@ -11,8 +11,8 @@
 --     answering all of it.
 --
 -- memory.search now spreads vector similarity over the candidates the same way
--- keyword relevance already is, and scales each keyword match by the share of
--- the question's words it contains. Signature, columns and grants are as in
+-- keyword relevance already is, and ranks each keyword match first by the share
+-- of the question's words it contains, then by how often they appear. Signature, columns and grants are as in
 -- 0011; the rest of the function is unchanged.
 
 CREATE OR REPLACE FUNCTION memory.search(
@@ -83,22 +83,27 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, extensions AS $$
     ) v
   ),
   kw AS (
-    -- A match counts for the share of the question's words it covers, so one
-    -- common word ("check", "get") no longer scores like the whole question.
-    SELECT k.memory_id, row_number() OVER (ORDER BY k.rank * (0.25 + 0.75 * k.cover) DESC, k.created_at DESC, k.memory_id)::int AS rnk,
-           k.rank / nullif(max(k.rank) OVER (), 0) * (0.25 + 0.75 * k.cover) AS rel
+    -- A match counts first for the share of the question's words it covers,
+    -- then for how often they appear, so one common word ("check", "get"),
+    -- however often repeated, no longer scores like the whole question.
+    SELECT k.memory_id, row_number() OVER (ORDER BY k.cover DESC, k.rank DESC, k.created_at DESC, k.memory_id)::int AS rnk,
+           k.cover * (0.5 + 0.5 * k.rank / nullif(max(k.rank) OVER (), 0)) AS rel
     FROM (
-      SELECT m.id AS memory_id, ts_rank_cd(m.fts, q.tsq) AS rank, m.created_at,
-             (SELECT count(*) FROM unnest(q.words) w WHERE m.fts @@ w)::double precision
-               / greatest(cardinality(q.words), 1) AS cover
-      FROM memory.memories m,
-           (SELECT nullif(anyq, '')::tsquery AS tsq, words FROM params) q
-      WHERE 'keyword' = ANY (p_retrievers) AND q.tsq IS NOT NULL
-        AND m.fts @@ q.tsq AND m.status = 'active'
-        AND (p_kind IS NULL OR m.kind = p_kind)
-        AND (p_from IS NULL OR m.created_at >= p_from)
-        AND (p_to IS NULL OR m.created_at <= p_to)
-      ORDER BY rank DESC, m.created_at DESC
+      SELECT a.* FROM (
+        SELECT m.id AS memory_id, ts_rank_cd(m.fts, q.tsq) AS rank, m.created_at,
+               (SELECT count(*) FROM unnest(q.words) w WHERE m.fts @@ w)::double precision
+                 / greatest(cardinality(q.words), 1) AS cover
+        FROM memory.memories m,
+             (SELECT nullif(anyq, '')::tsquery AS tsq, words FROM params) q
+        WHERE 'keyword' = ANY (p_retrievers) AND q.tsq IS NOT NULL
+          AND m.fts @@ q.tsq AND m.status = 'active'
+          AND (p_kind IS NULL OR m.kind = p_kind)
+          AND (p_from IS NULL OR m.created_at >= p_from)
+          AND (p_to IS NULL OR m.created_at <= p_to)
+      ) a
+      -- Candidates are chosen the same way, so a match on every word is not
+      -- crowded out by many that repeat one.
+      ORDER BY a.cover DESC, a.rank DESC, a.created_at DESC, a.memory_id
       LIMIT (SELECT pool FROM params)
     ) k
   ),

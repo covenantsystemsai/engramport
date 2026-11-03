@@ -71,6 +71,13 @@ describe("postgres store", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
     const cell1 = await ns("cell-1", "cell", tower.id);
     const cell2 = await ns("cell-2", "cell", tower.id);
     Object.assign(paths, { city: city.path, tower: tower.path, cell1: cell1.path, cell2: cell2.path });
+    // The stand-in embedder's model, set on these namespaces (migration 0011).
+    await admin.query(
+      "INSERT INTO memory.embedding_models VALUES ('fake-bow', 1536, true, 'test only') ON CONFLICT DO NOTHING",
+    );
+    await admin.query("UPDATE memory.namespaces SET embedding_model = 'fake-bow' WHERE id = ANY ($1)", [
+      [city.id, tower.id, other.id, cell1.id, cell2.id],
+    ]);
 
     const actor = async (slug: string, disabled = false) =>
       (

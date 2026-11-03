@@ -78,7 +78,7 @@ test("doctor on the postgres store shows the database user and host, never the p
   const text = lines.join("\n");
   assert.ok(!text.includes(secret));
   assert.match(text, /engramport_app @ db\.example\.com:5432\/postgres/);
-  assert.match(text, /keyword search only/);
+  assert.match(text, /keyword and graph search only/);
 });
 
 test("doctor on the postgres store exits 1 when the database is unreachable", async () => {

@@ -110,6 +110,12 @@ SELECT id AS c2_mem FROM memory.memories WHERE content = 'cell 2 secret' \gset
 SELECT id AS c1_mem FROM memory.memories WHERE content = 'cell 1 secret' \gset
 SELECT id AS ta_prov FROM memory.provenance WHERE namespace_id = :'ta' \gset
 
+-- Stand-in embedding models (0011), so these tests need no real model.
+INSERT INTO memory.embedding_models (model, dimension, stays_in_supabase, description)
+  VALUES ('test', 1536, true, 'test only'), ('test2', 1536, true, 'test only');
+UPDATE memory.namespaces SET embedding_model = 'test' WHERE id = :'c1';
+UPDATE memory.namespaces SET embedding_model = 'test2' WHERE id = :'c2';
+
 \echo '-- schema shape'
 SELECT t.expect_count('every memory table has row security on and forced',
   $$SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace

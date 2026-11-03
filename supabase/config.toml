@@ -1,0 +1,7 @@
+# Only the settings EngramPort's Edge Function needs. Deploying is a live step:
+# see docs/embeddings.md.
+
+[functions.embed]
+# The publishable key is public, so it can't be the check. The function checks
+# ENGRAMPORT_EMBED_SECRET itself.
+verify_jwt = false

@@ -79,6 +79,12 @@ describe("retrieval eval", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
     const tower = await ns("tower", "tower", city);
     const cell = await ns("cell", "cell", tower);
     const sibling = await ns("sibling", "cell", tower);
+    await admin.query(
+      "INSERT INTO memory.embedding_models VALUES ('eval-synonyms', 1536, true, 'test only') ON CONFLICT DO NOTHING",
+    );
+    await admin.query("UPDATE memory.namespaces SET embedding_model = 'eval-synonyms' WHERE id = ANY ($1)", [
+      [city, tower, cell, sibling],
+    ]);
     const actor = (
       await admin.query<{ id: string }>(
         "INSERT INTO memory.actors (kind, slug, display_name) VALUES ('agent', $1, $1) RETURNING id",

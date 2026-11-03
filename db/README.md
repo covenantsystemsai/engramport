@@ -196,3 +196,25 @@ psql postgresql://postgres@localhost:5432/postgres -c 'CREATE DATABASE store_tes
 DATABASE_URL=postgresql://postgres@localhost:5432/store_test db/migrate.sh
 ENGRAMPORT_TEST_DATABASE_URL=postgresql://postgres@localhost:5432/store_test npm run test:store
 ```
+
+## Embedding models (0011)
+
+- Each namespace names the one model its own memories may be embedded with,
+  in `namespaces.embedding_model`: `gte-small` (Supabase's built-in model,
+  384 dimensions, run by an Edge Function in the same project, the default for
+  a new city), `text-embedding-3-small` (OpenAI, 1536, text leaves Supabase)
+  or NULL for none. `memory.embedding_models` lists the known models. The
+  admin tool gives a new tower or cell its parent's model unless told
+  otherwise, and the admin role may change that one column and no other.
+- The server embeds a namespace's text only with that namespace's model. The
+  `embeddings_write` policy is the second check: it accepts an embedding only
+  when its model and size are the namespace's own, so even a server bug
+  can't store an OpenAI vector for a gte-small namespace.
+- `memory_embeddings.embedding` has no fixed size. Each size has its own HNSW
+  index over a cast to that size, and `memory.search` and
+  `memory.vector_search` cast the same way, so a query is only ever compared
+  with vectors of its own model and size. Memories a cell reads from a tower
+  or city that uses another model are still found by keyword and graph.
+- Changing a namespace's model leaves its stored embeddings in place, no
+  longer searched. Re-embedding is a separate job.
+

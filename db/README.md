@@ -8,8 +8,8 @@ SQL migrations for EngramPort's memory store on Supabase Postgres.
 - `migrate.sh`: applies new files to `$DATABASE_URL` and records each file's
   SHA-256 in `engramport_meta.schema_migrations`. A changed file stops the run.
 - `test/run.sh`: applies everything to a throwaway database and runs
-  `test/rls_test.sql`, `test/admin_test.sql`, `test/graph_test.sql` and
-  `test/index_test.sql`. CI runs it on every pull request.
+  `test/rls_test.sql`, `test/admin_test.sql`, `test/graph_test.sql`,
+  `test/company_test.sql` and `test/index_test.sql`. CI runs it on every pull request.
 
 Applying to a real project needs the owner's yes first.
 
@@ -71,6 +71,20 @@ Applying to a real project needs the owner's yes first.
 - Rows are never edited or deleted. Entities, relations and links can move
   from active to retracted once, for every role, the owner included. The
   admin role gets no access: the graph is client data.
+
+## Company namespace (0005)
+
+- Every namespace has a purpose: `client` (the default) or `company`, for the
+  operator's own knowledge. A city picks its purpose when it is created; a
+  tower or cell always has its parent's, so company and client namespaces never
+  share an ancestor. Since reads only flow down from ancestors, neither side
+  can read the other, and the graph can't point across either, because it only
+  points at what its writer can read.
+- A purpose never changes and a namespace never moves, for every role, the
+  owner included. There is at most one company city.
+- Nothing else changes: the company tree has the same cells, keys, provenance
+  and admin limits as any client's. The admin role creates it and still can't
+  read what is in it.
 
 ## Run the tests locally
 

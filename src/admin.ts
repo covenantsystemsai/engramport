@@ -30,9 +30,12 @@ const MAX_DURATION_MS = 3650 * 24 * 3600 * 1000;
 
 export class AdminError extends Error {}
 
+export type NamespacePurpose = "client" | "company";
+
 export interface NamespaceRow {
   path: string;
   level: string;
+  purpose: NamespacePurpose;
   created_at: Date;
 }
 export interface ActorRow {
@@ -161,23 +164,43 @@ export class AdminClient {
     return this.pepper;
   }
 
-  async createNamespace(path: string): Promise<NamespaceRow> {
+  /**
+   * Creates a namespace. A city is a client city unless `company` is set;
+   * a tower or cell always takes its parent's purpose, so passing `company`
+   * for one is refused rather than ignored. The database enforces the same
+   * rules (0005), and allows one company city.
+   */
+  async createNamespace(path: string, opts: { company?: boolean } = {}): Promise<NamespaceRow> {
     const parts = checkPath(path);
     const level = LEVELS[parts.length - 1];
     const parentPath = parts.slice(0, -1).join("/");
+    if (opts.company && level !== "city") {
+      throw new AdminError("only a city is marked as the company's; its towers and cells are company namespaces already");
+    }
     return this.tx(async (c) => {
       let parentId: string | null = null;
+      let purpose: NamespacePurpose = opts.company ? "company" : "client";
       if (parentPath) {
-        const parent = await c.query<{ id: string }>("SELECT id FROM memory.namespaces WHERE path = $1", [parentPath]);
+        const parent = await c.query<{ id: string; purpose: NamespacePurpose }>(
+          "SELECT id, purpose::text AS purpose FROM memory.namespaces WHERE path = $1",
+          [parentPath],
+        );
         if (!parent.rows[0]) throw new AdminError(`no namespace ${parentPath}; create it first`);
         parentId = parent.rows[0].id;
+        purpose = parent.rows[0].purpose;
       }
       const exists = await c.query("SELECT 1 FROM memory.namespaces WHERE path = $1", [path]);
       if (exists.rowCount) throw new AdminError(`namespace ${path} already exists`);
+      if (purpose === "company" && level === "city") {
+        const other = await c.query<{ path: string }>(
+          "SELECT path FROM memory.namespaces WHERE purpose = 'company' AND parent_id IS NULL",
+        );
+        if (other.rows[0]) throw new AdminError(`the company city is already ${other.rows[0].path}; there is only one`);
+      }
       const r = await c.query<NamespaceRow>(
-        `INSERT INTO memory.namespaces (parent_id, level, slug) VALUES ($1, $2, $3)
-         RETURNING path, level::text AS level, created_at`,
-        [parentId, level, parts[parts.length - 1]],
+        `INSERT INTO memory.namespaces (parent_id, level, slug, purpose) VALUES ($1, $2, $3, $4)
+         RETURNING path, level::text AS level, purpose::text AS purpose, created_at`,
+        [parentId, level, parts[parts.length - 1], purpose],
       );
       return r.rows[0];
     });
@@ -185,7 +208,11 @@ export class AdminClient {
 
   async listNamespaces(): Promise<NamespaceRow[]> {
     return this.tx(async (c) =>
-      (await c.query<NamespaceRow>("SELECT path, level::text AS level, created_at FROM memory.namespaces ORDER BY path")).rows,
+      (
+        await c.query<NamespaceRow>(
+          "SELECT path, level::text AS level, purpose::text AS purpose, created_at FROM memory.namespaces ORDER BY path",
+        )
+      ).rows,
     );
   }
 
@@ -397,7 +424,11 @@ export class AdminClient {
 
 export const ADMIN_USAGE = `Usage: engramport admin <command>
 
-  namespace create <path>            path is city, city/tower or city/tower/cell
+  namespace create <path> [--company]
+                                     path is city, city/tower or city/tower/cell;
+                                     --company makes a new city your company's own:
+                                     its towers and cells never share a city with
+                                     a client, so neither can read the other
   namespace list
   actor create <name> --kind agent|human|service --display "<display name>"
   actor list
@@ -412,6 +443,7 @@ export const ADMIN_USAGE = `Usage: engramport admin <command>
 
 A minted key is printed once, alone on stdout. Pipe it into your secrets
 manager; it cannot be shown again. City and tower names must not name a client.
+There is one company city; set it up once with namespace create <city> --company.
 
 Settings: ENGRAMPORT_ADMIN_DATABASE_URL, ENGRAMPORT_KEY_PEPPER (mint and rotate),
 ENGRAMPORT_DATABASE_CA_FILE (optional).`;
@@ -476,17 +508,21 @@ export async function runAdmin(argv: string[], open: () => AdminClient, io: Admi
     const cmd = `${group} ${action ?? ""}`.trim();
     switch (cmd) {
       case "namespace create": {
-        const { positional } = parseFlags(rest, {});
+        const { positional, flags } = parseFlags(rest, { company: "bool" });
         const path = one(positional, "namespace path");
+        const company = flags.company === true;
+        if (company && checkPath(path).length !== 1) {
+          throw new UsageError("--company goes on a city; its towers and cells are company namespaces already");
+        }
         checkPath(path);
-        const ns = await db().createNamespace(path);
-        io.out(`created ${ns.level} ${ns.path}`);
-        if (ns.level !== "cell") io.err("Reminder: city and tower names must not name a client.");
+        const ns = await db().createNamespace(path, { company });
+        io.out(`created ${ns.purpose} ${ns.level} ${ns.path}`);
+        if (ns.purpose === "client" && ns.level !== "cell") io.err("Reminder: city and tower names must not name a client.");
         return 0;
       }
       case "namespace list": {
         parseFlags(rest, {});
-        for (const ns of await db().listNamespaces()) io.out(`${ns.level.padEnd(5)}  ${ns.path}`);
+        for (const ns of await db().listNamespaces()) io.out(`${ns.level.padEnd(5)}  ${ns.purpose.padEnd(7)}  ${ns.path}`);
         return 0;
       }
       case "actor create": {

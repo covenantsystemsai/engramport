@@ -142,6 +142,9 @@ Keep all of these in a secrets manager, never in a file in the repo. On this sto
 engramport admin namespace create acme                # a city
 engramport admin namespace create acme/ops            # a tower
 engramport admin namespace create acme/ops/pilot      # a cell
+engramport admin namespace create mycompany --company # your own company's city, once
+engramport admin namespace create mycompany/knowledge
+engramport admin namespace create mycompany/knowledge/hq
 engramport admin actor create claude --kind agent --display "Claude"
 engramport admin key mint --namespace acme/ops/pilot --actor claude --expires-in 90d
 engramport admin key list --namespace acme/ops/pilot
@@ -150,6 +153,8 @@ engramport admin key revoke ep_live_XXXXXXXXXXXX
 ```
 
 A minted key is printed once, alone on stdout, so you can pipe it straight into your secrets manager; only its HMAC is stored. Rotation keeps the old key working for the grace period (`--grace 0` revokes it at once), and revoking or disabling an actor takes effect on the key's next request. Revoke and rotate take the key's prefix, never the whole key, so keys stay out of shell history. City and tower names must not name a client.
+
+Your own company gets one city of its own, made with `--company`. Its towers and cells are company namespaces too, and the database refuses to put a client namespace under it or a company namespace under a client, so company knowledge and client data never share a city and neither can read the other. Mint its keys like any other.
 
 | Variable | What it does |
 |---|---|

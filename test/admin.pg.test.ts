@@ -172,6 +172,54 @@ describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABA
     assert.ok(await store.recall(k.key, { query: "anything", mode: "keyword" }));
   });
 
+  test("the company city is marked once, and its towers and cells inherit it", async () => {
+    // One company city per database: use the one a rerun left behind, if any.
+    const existing = await superPool.query<{ path: string }>(
+      "SELECT path FROM memory.namespaces WHERE purpose = 'company' AND parent_id IS NULL",
+    );
+    const coCity = existing.rows[0]?.path ?? `co-${run}`;
+    if (!existing.rows[0]) {
+      const made = await admin.createNamespace(coCity, { company: true });
+      assert.deepEqual([made.level, made.purpose], ["city", "company"]);
+    }
+    const tower = await admin.createNamespace(`${coCity}/t-${run}`);
+    const coCell = await admin.createNamespace(`${coCity}/t-${run}/hq`);
+    assert.deepEqual([tower.purpose, coCell.purpose], ["company", "company"]);
+    assert.equal((await admin.createNamespace(`adm2-${run}`)).purpose, "client");
+    await refused(admin.createNamespace(`another-${run}`, { company: true }), /already .*only one/);
+    await refused(admin.createNamespace(`${city}/co-${run}`, { company: true }), /only a city/);
+    const listed = await admin.listNamespaces();
+    assert.equal(listed.find((n) => n.path === coCell.path)?.purpose, "company");
+    assert.equal(listed.find((n) => n.path === cell)?.purpose, "client");
+
+    // The company cell and a client cell cannot read each other.
+    const coKey = await admin.mintKey({ namespace: coCell.path, actor: `claude-${run}` });
+    const clientKey = await admin.mintKey({ namespace: cell, actor: `claude-${run}` });
+    await store.remember(coKey.key, { content: `company only pricing rule ${run}` });
+    await store.remember(clientKey.key, { content: `client only launch note ${run}` });
+    const fromCompany = JSON.stringify(await store.recall(coKey.key, { query: run, mode: "keyword" }));
+    const fromClient = JSON.stringify(await store.recall(clientKey.key, { query: run, mode: "keyword" }));
+    assert.ok(fromCompany.includes("company only pricing rule"));
+    assert.ok(!fromCompany.includes("client only launch note"), "the company cell never sees a client memory");
+    assert.ok(fromClient.includes("client only launch note"));
+    assert.ok(!fromClient.includes("company only pricing rule"), "a client cell never sees a company memory");
+    await storeFails(store.remember(clientKey.key, { content: "x", namespace: coCell.path }), "forbidden");
+    await storeFails(store.remember(coKey.key, { content: "x", namespace: cell }), "forbidden");
+  });
+
+  test("the command line marks a city as the company's and shows purposes", async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const io = { out: (l: string) => out.push(l), err: (l: string) => err.push(l) };
+    const open = () => new AdminClient(new pg.Pool({ connectionString: urlAs(opsRole, "ops-test-only") }), pepper);
+    assert.equal(await runAdmin(["namespace", "create", `nope-${run}`, "--company"], open, io), 1);
+    assert.match(err.join("\n"), /only one/);
+    out.length = 0;
+    assert.equal(await runAdmin(["namespace", "list"], open, io), 0);
+    assert.ok(out.some((l) => /^cell\s+company\s/.test(l) && l.endsWith(`/t-${run}/hq`)), out.join("\n"));
+    assert.ok(out.some((l) => l.includes("client") && l.endsWith(cell)));
+  });
+
   test("the command line prints a minted key alone on stdout", async () => {
     const out: string[] = [];
     const err: string[] = [];

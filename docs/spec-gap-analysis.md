@@ -201,7 +201,7 @@ Classes, as §23 defines them:
 | 18 | Isolation tests | Verified | Cell, tower, city, revoked, expired, worker, graph and vector covered. Metadata and error-text leakage aren't specifically covered, and promotion doesn't exist |
 | 18 | Reliability tests | Partial | Concurrent dedup writes and extraction races tested. No retry storms, network faults, restarts or oversized-payload tests |
 | 18 | Trust tests | Missing | |
-| 19 | First pilot | Decision | Which cell goes first is open (below) |
+| 19 | First pilot | Missing | Decided 2026-11-03: the cell already planned goes first, not the one the spec names. The §19 steps apply to it unchanged |
 | 20 | Phases | Partial | Phase 0 is this document. Phase 1 waits on deploy and a live sign-in |
 | 21 | Documentation set | Partial | `README.md`, `db/README.md`, `docs/oauth-setup.md`, this file |
 | 22 | Acceptance criteria | Partial | See "Effect on the pilot" |
@@ -256,7 +256,7 @@ Agents act on these descriptions, so they should say what the Postgres store doe
 
 **Content-blind admin.** The spec's limits are right and aren't written down yet (Security risks below).
 
-**Pilot.** The spec names a pilot cell that differs from the one planned so far. That choice is a product decision and isn't assumed here.
+**Pilot.** The spec names a pilot cell that differs from the one planned so far. Decided on 2026-11-03: the planned cell stays first, and the spec's §19 steps are run against it.
 
 ## Security risks
 
@@ -439,9 +439,10 @@ A pilot that meets all of §22 also needs items 7 to 10 and 13 to 15.
 
 ## Decisions needed
 
-1. **Which cell is the first pilot.** The spec names one; the plan so far named another.
-2. **Content leaving Supabase.** Whether pilot content may go to OpenAI for embeddings, and to which provider for extraction. Or whether the pilot cell turns embedding and extraction off, and runs keyword and asserted-graph retrieval only.
-3. **Deletion semantics.** Whether an erased memory keeps a tombstone and its provenance row for audit, and what backup window to promise.
-4. **Tool naming.** Underscored names with the current ones kept, or the spec's dotted names after testing in each client.
-5. **Who may approve and verify.** Which actors count as authorities: a human role, and a CI service actor.
-6. **Tower and city reads.** Every cell reads its tower and city today. That fits shared product knowledge, but it means anything a tower key writes reaches every cell under it.
+The first pilot cell was decided on 2026-11-03: the planned cell goes first. The rest are open:
+
+1. **Content leaving Supabase.** Whether pilot content may go to OpenAI for embeddings, and to which provider for extraction. Or whether the pilot cell turns embedding and extraction off, and runs keyword and asserted-graph retrieval only.
+2. **Deletion semantics.** Whether an erased memory keeps a tombstone and its provenance row for audit, and what backup window to promise.
+3. **Tool naming.** Underscored names with the current ones kept, or the spec's dotted names after testing in each client.
+4. **Who may approve and verify.** Which actors count as authorities: a human role, and a CI service actor.
+5. **Tower and city reads.** Every cell reads its tower and city today. That fits shared product knowledge, but it means anything a tower key writes reaches every cell under it.

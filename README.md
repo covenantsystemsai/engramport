@@ -140,7 +140,7 @@ An extraction job (in progress) will read each new memory with a model and add t
 
 #### Sign in with Google (OAuth, preview)
 
-With `ENGRAMPORT_OAUTH=true`, a hosted server on the Postgres store lets claude.ai and other MCP clients connect without a pasted key. The client finds the sign-in from the 401 on `/mcp`, registers itself, and sends the person to sign in with Google (through Supabase Auth). The server then shows the namespaces that Google email is a member of; the person picks one, and the client gets a key for that namespace only, valid for an hour, with a refresh token that works once and is replaced each time. Reusing a code or a refresh token revokes the whole grant. Memberships are added and revoked with `engramport admin member` (below); the database rules are in `db/README.md`.
+With `ENGRAMPORT_OAUTH=true`, a hosted server on the Postgres store lets claude.ai and other MCP clients connect without a pasted key. The client finds the sign-in from the 401 on `/mcp`, registers itself, and sends the person to sign in with Google (through Supabase Auth). The server then shows the namespaces that Google email is a member of; the person picks one, and the client gets a key for that namespace only, valid for an hour, with a refresh token that works once and is replaced each time. Reusing a code or a refresh token revokes the whole grant. Memberships are added and revoked with `engramport admin member` (below); the database rules are in `db/README.md`. Setting it up, from the Google client to the first sign-in, is in [docs/oauth-setup.md](docs/oauth-setup.md).
 
 | Variable | Required | What it does |
 |---|---|---|

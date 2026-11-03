@@ -9,7 +9,8 @@ SQL migrations for EngramPort's memory store on Supabase Postgres.
   SHA-256 in `engramport_meta.schema_migrations`. A changed file stops the run.
 - `test/run.sh`: applies everything to a throwaway database and runs
   `test/rls_test.sql`, `test/admin_test.sql`, `test/graph_test.sql`,
-  `test/company_test.sql`, `test/audit_test.sql` and `test/index_test.sql`. CI runs it on every pull request.
+  `test/company_test.sql`, `test/audit_test.sql`, `test/extraction_test.sql` and
+  `test/index_test.sql`. CI runs it on every pull request.
 
 Applying to a real project needs the owner's yes first.
 
@@ -100,6 +101,22 @@ Applying to a real project needs the owner's yes first.
   change or delete provenance.
 - `engramport admin audit` reads this trail together with the key lifecycle
   (minted, revoked) it could already see.
+
+## Extraction (0007)
+
+- `extraction_runs` records that an extractor (named with its version, such
+  as `claude-haiku/v1`) read a memory: finished once, or failed with a short
+  error class such as `timeout`. It holds counts, never memory text or a
+  provider's message. A memory is finished at most once per extractor, so it
+  is never read into the graph twice, and a new version can read it again.
+- A run sits in the memory's own namespace, on one of that namespace's own
+  memories, under a `job` provenance of the writer's own key. It is read only
+  in that namespace, never changed or deleted, and the admin role can't read
+  it.
+- `pg_trgm`, in the `extensions` schema, with trigram indexes on entity and
+  alias names, so the job can match "Grok Bots" to an existing "Grok Bot".
+  The match is made in the store, only among entities the key can read and of
+  the same type, and only when one candidate is clearly ahead of the next.
 
 ## Run the tests locally
 

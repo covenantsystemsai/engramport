@@ -20,6 +20,7 @@ import pg from "pg";
 import { chunkText } from "../chunk.js";
 import { Embedder, vectorLiteral } from "../embeddings.js";
 import { hashKey, parseKey } from "../keys.js";
+import { cleanExtraction, Extraction, EXTRACTOR_ID, Extractor, ExtractorError } from "./extract.js";
 import { getEntityTx, GetEntityInput, LinkInput, linkTx, UnlinkTarget, unlinkTx } from "./graph.js";
 
 export type MemoryKind =
@@ -568,6 +569,149 @@ export class PostgresStore {
       PostgresStore.checkNamespace(ctx, input.namespace);
       PostgresStore.requireWrite(ctx);
       return linkTx(c, ctx, this.opts.transport, input);
+    });
+  }
+
+  /**
+   * Read the key's own active memories that this extractor has not finished,
+   * oldest first, and write what it finds to the graph as extracted rows.
+   *
+   * Runs only in the job transport: the database lets nothing else mark rows
+   * as extracted or record a run. Each memory is read outside any database
+   * transaction, so a slow model holds no locks, and is then written in one
+   * transaction of its own with its own provenance (tool 'extract'). A memory
+   * whose extractor fails gets a failed run with a short error class and is
+   * tried again on a later pass, up to maxAttempts times. A memory another job
+   * finished in the meantime is skipped, never read into the graph twice.
+   */
+  async extract(rawKey: string, extractor: Extractor, opts: { limit?: number; maxAttempts?: number } = {}) {
+    if (!EXTRACTOR_ID.test(extractor.id)) throw new StoreError("invalid", "extractor id must be a short lower case slug");
+    if (this.opts.transport !== "job") throw new StoreError("forbidden", "extraction runs only as a job");
+    const limit = opts.limit ?? 20;
+    const maxAttempts = opts.maxAttempts ?? 3;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new StoreError("invalid", "limit must be 1 to 500");
+    if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10) {
+      throw new StoreError("invalid", "max attempts must be 1 to 10");
+    }
+
+    const pending = await this.withKey(rawKey, async (c, ctx) => {
+      PostgresStore.requireWrite(ctx);
+      const r = await c.query<{ id: string; kind: string; content: string }>(
+        `SELECT m.id, m.kind::text AS kind, m.content
+         FROM memory.memories m
+         WHERE m.namespace_id = $1 AND m.status = 'active'
+           AND NOT EXISTS (SELECT 1 FROM memory.extraction_runs r
+                           WHERE r.memory_id = m.id AND r.extractor = $2 AND r.status = 'done')
+           AND (SELECT count(*) FROM memory.extraction_runs r
+                WHERE r.memory_id = m.id AND r.extractor = $2 AND r.status = 'failed') < $3
+         ORDER BY m.created_at, m.id
+         LIMIT $4`,
+        [ctx.namespaceId, extractor.id, maxAttempts, limit],
+      );
+      return { namespace: ctx.namespace, rows: r.rows };
+    });
+
+    const summary = { namespace: pending.namespace, extractor: extractor.id, read: 0, done: 0, failed: 0, skipped: 0,
+      entities: 0, relations: 0 };
+    for (const m of pending.rows) {
+      summary.read += 1;
+      let found: Extraction;
+      try {
+        found = cleanExtraction(await extractor.extract({ text: m.content, kind: m.kind }), m.content);
+      } catch (err) {
+        const errorClass = err instanceof ExtractorError ? err.errorClass : "error";
+        if (await this.recordRun(rawKey, extractor.id, m.id, { status: "failed", errorClass })) summary.failed += 1;
+        else summary.skipped += 1;
+        continue;
+      }
+      let wrote: { entities: number; relations: number } | null;
+      try {
+        wrote = await this.writeExtraction(rawKey, extractor.id, m.id, found);
+      } catch (err) {
+        if (!(err instanceof StoreError)) throw err;
+        if (await this.recordRun(rawKey, extractor.id, m.id, { status: "failed", errorClass: err.code })) {
+          summary.failed += 1;
+        } else summary.skipped += 1;
+        continue;
+      }
+      if (!wrote) {
+        summary.skipped += 1;
+        continue;
+      }
+      summary.done += 1;
+      summary.entities += wrote.entities;
+      summary.relations += wrote.relations;
+    }
+    return summary;
+  }
+
+  /** The memory is still active and not yet finished by this extractor. */
+  private static async stillPending(c: pg.PoolClient, ctx: KeyContext, extractorId: string, memoryId: string) {
+    const r = await c.query(
+      `SELECT 1 FROM memory.memories m
+       WHERE m.id = $1 AND m.namespace_id = $2 AND m.status = 'active'
+         AND NOT EXISTS (SELECT 1 FROM memory.extraction_runs r
+                         WHERE r.memory_id = m.id AND r.extractor = $3 AND r.status = 'done')
+       FOR UPDATE OF m`,
+      [memoryId, ctx.namespaceId, extractorId],
+    );
+    return Boolean(r.rowCount);
+  }
+
+  private static async extractProvenance(c: pg.PoolClient, extractorId: string): Promise<string> {
+    const r = await c.query<{ id: string }>(
+      "SELECT memory.record_provenance(p_tool => 'extract', p_transport => 'job', p_client_name => $1) AS id",
+      [extractorId],
+    );
+    return r.rows[0].id;
+  }
+
+  /** Returns null when the memory was retracted or finished by another job meanwhile. */
+  private async writeExtraction(rawKey: string, extractorId: string, memoryId: string, found: Extraction) {
+    try {
+      return await this.withKey(rawKey, async (c, ctx) => {
+        PostgresStore.requireWrite(ctx);
+        if (!(await PostgresStore.stillPending(c, ctx, extractorId, memoryId))) return null;
+        const provenanceId = await PostgresStore.extractProvenance(c, extractorId);
+        let entities = 0;
+        let relations = 0;
+        if (found.entities.length || found.relations.length) {
+          const res = await linkTx(
+            c, ctx, "job",
+            { memoryId, entities: found.entities, relations: found.relations },
+            { origin: "extracted", provenanceId, fuzzy: true, skipSelfRelations: true },
+          );
+          entities = res.entities.length;
+          relations = res.relations.length;
+        }
+        await c.query(
+          `INSERT INTO memory.extraction_runs (namespace_id, memory_id, extractor, status, entities_found,
+             relations_found, provenance_id)
+           VALUES ($1, $2, $3, 'done', $4, $5, $6)`,
+          [ctx.namespaceId, memoryId, extractorId, entities, relations, provenanceId],
+        );
+        return { entities, relations };
+      });
+    } catch (err) {
+      if ((err as { code?: string }).code === "23505") return null;
+      throw err;
+    }
+  }
+
+  /** Returns false when there was nothing left to record against. */
+  private async recordRun(
+    rawKey: string, extractorId: string, memoryId: string, run: { status: "failed"; errorClass: string },
+  ): Promise<boolean> {
+    return this.withKey(rawKey, async (c, ctx) => {
+      PostgresStore.requireWrite(ctx);
+      if (!(await PostgresStore.stillPending(c, ctx, extractorId, memoryId))) return false;
+      const provenanceId = await PostgresStore.extractProvenance(c, extractorId);
+      await c.query(
+        `INSERT INTO memory.extraction_runs (namespace_id, memory_id, extractor, status, error_class, provenance_id)
+         VALUES ($1, $2, $3, $4::memory.extraction_status, $5, $6)`,
+        [ctx.namespaceId, memoryId, extractorId, run.status, run.errorClass, provenanceId],
+      );
+      return true;
     });
   }
 

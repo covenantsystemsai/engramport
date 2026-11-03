@@ -57,7 +57,11 @@ SELECT t.expect_rows('the admin role shortens a key''s expiry',
 SELECT t.expect_denied('the admin role cannot read a key hash',
   'SELECT key_hash FROM memory.api_keys');
 SELECT t.expect_denied('the admin role cannot read memories', 'SELECT 1 FROM memory.memories');
-SELECT t.expect_denied('the admin role cannot read provenance', 'SELECT 1 FROM memory.provenance');
+-- Since 0006 it reads provenance metadata for the audit; audit_test.sql checks
+-- exactly which columns. The parts that could carry or confirm content stay shut.
+SELECT t.expect_denied('the admin role cannot read a provenance content hash',
+  'SELECT content_sha256 FROM memory.provenance');
+SELECT t.expect_denied('the admin role cannot read every provenance column', 'SELECT * FROM memory.provenance');
 SELECT t.expect_denied('the admin role cannot read embeddings', 'SELECT 1 FROM memory.memory_embeddings');
 SELECT t.expect_denied('the admin role cannot write memories',
   $$SELECT memory.remember('fact', 'from admin', 'remember', 'rest')$$);

@@ -136,7 +136,7 @@ Keep all of these in a secrets manager, never in a file in the repo. On this sto
 
 #### Managing namespaces and keys
 
-`engramport admin` creates namespaces and actors and mints, rotates and revokes keys for this store. It runs as the `engramport_admin` database role, which can do exactly that and nothing more: it cannot read memories, provenance, embeddings or stored key hashes, and it cannot delete anything.
+`engramport admin` creates namespaces and actors and mints, rotates and revokes keys for this store. It also shows the audit trail. It runs as the `engramport_admin` database role, which can do exactly that and nothing more: it cannot read memories, embeddings, graph rows or stored key hashes, it sees provenance metadata but never content, and it cannot delete anything.
 
 ```
 engramport admin namespace create acme                # a city
@@ -150,11 +150,14 @@ engramport admin key mint --namespace acme/ops/pilot --actor claude --expires-in
 engramport admin key list --namespace acme/ops/pilot
 engramport admin key rotate ep_live_XXXXXXXXXXXX --grace 24h
 engramport admin key revoke ep_live_XXXXXXXXXXXX
+engramport admin audit --namespace acme --since 7d   # who wrote what, where and when
 ```
 
 A minted key is printed once, alone on stdout, so you can pipe it straight into your secrets manager; only its HMAC is stored. Rotation keeps the old key working for the grace period (`--grace 0` revokes it at once), and revoking or disabling an actor takes effect on the key's next request. Revoke and rotate take the key's prefix, never the whole key, so keys stay out of shell history. City and tower names must not name a client.
 
 Your own company gets one city of its own, made with `--company`. Its towers and cells are company namespaces too, and the database refuses to put a client namespace under it or a company namespace under a client, so company knowledge and client data never share a city and neither can read the other. Mint its keys like any other.
+
+`audit` lists, newest first, every write (the agent, its key, the tool, the transport and client, the namespace and the time) and every key minted or revoked. It never shows memory text, its hash, fields an agent claims about itself, or source references: the admin role cannot read them. `--namespace` includes everything under that path; `--actor`, `--since`, `--limit` (up to 1000) and `--writes-only` narrow it.
 
 | Variable | What it does |
 |---|---|

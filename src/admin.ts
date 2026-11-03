@@ -2,9 +2,11 @@
  * `engramport admin`: manage namespaces, actors and keys in the memory store.
  *
  * Runs as the engramport_admin database role (migration 0002), which can
- * create namespaces and actors, mint, rotate and revoke keys, and nothing else:
- * it cannot read memories, provenance, embeddings or stored key hashes, and it
- * cannot delete. The connection URL may belong to any login role that has been
+ * create namespaces and actors, mint, rotate and revoke keys, and read the
+ * audit trail (0006): who wrote, through which agent, client, tool and
+ * transport, where and when. It cannot read memories, embeddings, graph rows,
+ * stored key hashes, or the parts of provenance that could carry or confirm
+ * content, and it cannot delete. The connection URL may belong to any login role that has been
  * granted SET on engramport_admin; every transaction switches to that role
  * first, so a more powerful login is still held to the admin role's limits.
  *
@@ -55,6 +57,33 @@ export interface KeyRow {
   revoked_at: Date | null;
   last_used_at: Date | null;
 }
+export type AuditEvent = "write" | "key minted" | "key revoked";
+
+/** One line of the audit trail. Metadata only: no content, hash or claimed fields. */
+export interface AuditRow {
+  at: Date;
+  event: AuditEvent;
+  namespace: string;
+  actor: string;
+  key_prefix: string;
+  tool: string | null;
+  transport: string | null;
+  client: string | null;
+  session_id: string | null;
+  request_id: string | null;
+}
+
+export interface AuditFilter {
+  /** A namespace path; its towers and cells are included. */
+  namespace?: string;
+  actor?: string;
+  sinceMs?: number;
+  /** 1 to 1000, default 100. */
+  limit?: number;
+  /** Leave out key minted and revoked events. */
+  writesOnly?: boolean;
+}
+
 export interface MintedKey {
   key: string;
   prefix: string;
@@ -406,6 +435,58 @@ export class AdminClient {
     });
   }
 
+  /**
+   * The audit trail, newest first: every write's provenance metadata and every
+   * key minted or revoked. Never memory text, its hash, agent-claimed fields
+   * or source references; the admin role cannot read those (0006).
+   */
+  async audit(filter: AuditFilter = {}): Promise<AuditRow[]> {
+    if (filter.namespace) checkPath(filter.namespace);
+    if (filter.actor) checkSlug(filter.actor, "actor name");
+    const limit = filter.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new AdminError("the limit must be 1 to 1000");
+    if (filter.sinceMs !== undefined && filter.sinceMs <= 0) throw new AdminError("--since must be longer than 0");
+    const since = filter.sinceMs === undefined ? null : new Date(Date.now() - filter.sinceMs);
+    return this.tx(async (c) => {
+      if (filter.namespace) {
+        const ns = await c.query("SELECT 1 FROM memory.namespaces WHERE path = $1", [filter.namespace]);
+        if (!ns.rowCount) throw new AdminError(`no namespace ${filter.namespace}`);
+      }
+      if (filter.actor) {
+        const a = await c.query("SELECT 1 FROM memory.actors WHERE slug = $1", [filter.actor]);
+        if (!a.rowCount) throw new AdminError(`no actor ${filter.actor}`);
+      }
+      const r = await c.query<AuditRow>(
+        `WITH scope AS (
+           SELECT id, path FROM memory.namespaces
+           WHERE $1::text IS NULL OR path = $1 OR starts_with(path, $1 || '/')
+         ),
+         events AS (
+           SELECT p.created_at AS at, 'write' AS event, s.path AS namespace, a.slug AS actor,
+                  k.prefix AS key_prefix, p.tool, p.transport::text AS transport,
+                  nullif(concat_ws(' ', p.client_name, p.client_version), '') AS client,
+                  p.session_id, p.request_id
+           FROM memory.provenance p
+           JOIN scope s ON s.id = p.namespace_id
+           JOIN memory.actors a ON a.id = p.actor_id
+           JOIN memory.api_keys k ON k.id = p.api_key_id
+           WHERE ($2::text IS NULL OR a.slug = $2) AND ($3::timestamptz IS NULL OR p.created_at >= $3)
+           UNION ALL
+           SELECT x.at, x.event, s.path, a.slug, k.prefix, NULL, NULL, NULL, NULL, NULL
+           FROM memory.api_keys k
+           JOIN scope s ON s.id = k.namespace_id
+           JOIN memory.actors a ON a.id = k.actor_id
+           CROSS JOIN LATERAL (VALUES (k.created_at, 'key minted'), (k.revoked_at, 'key revoked')) AS x(at, event)
+           WHERE NOT $5 AND x.at IS NOT NULL
+             AND ($2::text IS NULL OR a.slug = $2) AND ($3::timestamptz IS NULL OR x.at >= $3)
+         )
+         SELECT * FROM events ORDER BY at DESC, event LIMIT $4`,
+        [filter.namespace ?? null, filter.actor ?? null, since, limit, filter.writesOnly ?? false],
+      );
+      return r.rows;
+    });
+  }
+
   private async keyByPrefix(c: pg.PoolClient, prefix: string): Promise<KeyRow> {
     const r = await c.query<KeyRow>(
       `SELECT k.prefix, n.path AS namespace, a.slug AS actor, k.scopes, k.created_at, k.expires_at,
@@ -440,6 +521,10 @@ export const ADMIN_USAGE = `Usage: engramport admin <command>
                                      --grace 0 revokes the old key at once; the new
                                      key gets the old one's lifetime unless told
   key revoke <prefix>
+  audit [--namespace <path>] [--actor <name>] [--since 7d] [--limit 100] [--writes-only]
+                                     newest first: who wrote, through which client,
+                                     tool and transport, where and when, and every
+                                     key minted or revoked. Never memory content.
 
 A minted key is printed once, alone on stdout. Pipe it into your secrets
 manager; it cannot be shown again. City and tower names must not name a client.
@@ -505,7 +590,9 @@ export async function runAdmin(argv: string[], open: () => AdminClient, io: Admi
   let client: AdminClient | undefined;
   const db = () => (client ??= open());
   try {
-    const cmd = `${group} ${action ?? ""}`.trim();
+    // audit takes no sub-command, so everything after it is its options.
+    const cmd = group === "audit" ? "audit" : `${group} ${action ?? ""}`.trim();
+    if (cmd === "audit" && action !== undefined) rest.unshift(action);
     switch (cmd) {
       case "namespace create": {
         const { positional, flags } = parseFlags(rest, { company: "bool" });
@@ -568,6 +655,34 @@ export async function runAdmin(argv: string[], open: () => AdminClient, io: Admi
             "It is shown once, below. Put it in your secrets manager now.",
         );
         io.out(minted.key);
+        return 0;
+      }
+      case "audit": {
+        const { positional, flags } = parseFlags(rest, {
+          namespace: "value",
+          actor: "value",
+          since: "value",
+          limit: "value",
+          "writes-only": "bool",
+        });
+        if (positional.length) throw new UsageError(`unexpected argument ${positional[0]}`);
+        let limit: number | undefined;
+        if (typeof flags.limit === "string") {
+          if (!/^\d{1,4}$/.test(flags.limit)) throw new UsageError("--limit takes a whole number from 1 to 1000");
+          limit = Number(flags.limit);
+        }
+        const rows = await db().audit({
+          namespace: typeof flags.namespace === "string" ? flags.namespace : undefined,
+          actor: typeof flags.actor === "string" ? flags.actor : undefined,
+          sinceMs: typeof flags.since === "string" ? parseDuration(flags.since) : undefined,
+          limit,
+          writesOnly: flags["writes-only"] === true,
+        });
+        for (const r of rows) {
+          const via = r.event === "write" ? `${r.tool} via ${r.transport}${r.client ? ` (${r.client})` : ""}` : "";
+          io.out(`${when(r.at)}  ${r.event.padEnd(11)}  ${r.namespace}  ${r.actor}  ${r.key_prefix}${via ? `  ${via}` : ""}`);
+        }
+        if (!rows.length) io.err("Nothing in the audit trail for that filter.");
         return 0;
       }
       case "key list": {

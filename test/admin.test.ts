@@ -64,3 +64,10 @@ test("--company goes on a city only, refused before any database work", async ()
     assert.match(c.err.join("\n"), /--company goes on a city/);
   }
 });
+
+test("audit usage errors exit 2 without touching the database", async () => {
+  for (const argv of [["audit", "extra"], ["audit", "--limit", "many"], ["audit", "--since"], ["audit", "--bogus"]]) {
+    const c = capture();
+    assert.equal(await runAdmin(argv, noDb, c.io), 2, argv.join(" "));
+  }
+});

@@ -9,7 +9,7 @@
  */
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import pg from "pg";
 
 import { AdminClient, AdminError, runAdmin } from "../src/admin.ts";
@@ -218,6 +218,50 @@ describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABA
     assert.equal(await runAdmin(["namespace", "list"], open, io), 0);
     assert.ok(out.some((l) => /^cell\s+company\s/.test(l) && l.endsWith(`/t-${run}/hq`)), out.join("\n"));
     assert.ok(out.some((l) => l.includes("client") && l.endsWith(cell)));
+  });
+
+  test("the audit shows who wrote what, where and when, and never the content", async () => {
+    const k = await admin.mintKey({ namespace: cell, actor: `grok-${run}` });
+    const secret = `audit secret text ${run}`;
+    await store.remember(k.key, { content: secret });
+    const rows = await admin.audit({ namespace: city });
+    const write = rows.find((r) => r.event === "write" && r.key_prefix === k.prefix);
+    assert.ok(write, "the write is in the trail");
+    assert.deepEqual([write.namespace, write.actor, write.tool, write.transport], [cell, `grok-${run}`, "remember", "stdio"]);
+    assert.ok(rows.some((r) => r.event === "key minted" && r.key_prefix === k.prefix));
+    const text = JSON.stringify(rows);
+    assert.ok(!text.includes(secret), "no memory text");
+    const hash = createHash("sha256").update(secret).digest("hex");
+    assert.ok(!text.includes(hash), "no content hash");
+
+    // Filters: a namespace includes everything under it; actor, time and writes only narrow it.
+    assert.ok((await admin.audit({ namespace: cell })).some((r) => r.key_prefix === k.prefix));
+    assert.ok(!(await admin.audit({ namespace: `${city}/tower/cell-2` })).some((r) => r.key_prefix === k.prefix));
+    const mine = await admin.audit({ namespace: city, actor: `grok-${run}`, writesOnly: true });
+    assert.ok(mine.length > 0 && mine.every((r) => r.actor === `grok-${run}` && r.event === "write"));
+    assert.ok((await admin.audit({ namespace: city, sinceMs: 3_600_000 })).some((r) => r.key_prefix === k.prefix));
+    assert.equal((await admin.audit({ namespace: city, limit: 1 })).length, 1);
+    const newest = await admin.audit({ namespace: city });
+    for (let i = 1; i < newest.length; i++) assert.ok(newest[i - 1].at >= newest[i].at, "newest first");
+
+    await admin.revokeKey(k.prefix);
+    assert.ok((await admin.audit({ namespace: cell })).some((r) => r.event === "key revoked" && r.key_prefix === k.prefix));
+    await refused(admin.audit({ namespace: `${city}/nope` }), /no namespace/);
+    await refused(admin.audit({ actor: "nobody-here" }), /no actor/);
+    await refused(admin.audit({ limit: 5000 }), /limit/);
+  });
+
+  test("the audit command prints one line per event and no content", async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const io = { out: (l: string) => out.push(l), err: (l: string) => err.push(l) };
+    const open = () => new AdminClient(new pg.Pool({ connectionString: urlAs(opsRole, "ops-test-only") }), pepper);
+    const k = await admin.mintKey({ namespace: cell, actor: `claude-${run}` });
+    await store.remember(k.key, { content: `cli audit secret ${run}` });
+    assert.equal(await runAdmin(["audit", "--namespace", cell, "--since", "1h", "--limit", "50"], open, io), 0, err.join("\n"));
+    assert.ok(out.some((l) => l.includes(" write ") && l.includes(k.prefix) && l.includes("remember via stdio")), out.join("\n"));
+    assert.ok(out.some((l) => l.includes("key minted") && l.includes(k.prefix)));
+    assert.ok(out.every((l) => !l.includes("cli audit secret")));
   });
 
   test("the command line prints a minted key alone on stdout", async () => {

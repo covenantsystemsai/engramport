@@ -9,7 +9,7 @@ SQL migrations for EngramPort's memory store on Supabase Postgres.
   SHA-256 in `engramport_meta.schema_migrations`. A changed file stops the run.
 - `test/run.sh`: applies everything to a throwaway database and runs
   `test/rls_test.sql`, `test/admin_test.sql`, `test/graph_test.sql`,
-  `test/company_test.sql` and `test/index_test.sql`. CI runs it on every pull request.
+  `test/company_test.sql`, `test/audit_test.sql` and `test/index_test.sql`. CI runs it on every pull request.
 
 Applying to a real project needs the owner's yes first.
 
@@ -37,7 +37,8 @@ Applying to a real project needs the owner's yes first.
 - `engramport_admin` is what `engramport admin` runs as. It creates
   namespaces and actors, mints keys (it writes the HMAC and can never read a
   stored one back), revokes keys and sets their expiry. It cannot read or
-  write memories, provenance or embeddings, and cannot delete anything.
+  write memories, embeddings or graph rows, and cannot delete anything. Since
+  0006 it can read provenance metadata for the audit (below), never content.
 - It has no login. Give an operator's login role the right to switch to it:
 
   ```
@@ -85,6 +86,20 @@ Applying to a real project needs the owner's yes first.
 - Nothing else changes: the company tree has the same cells, keys, provenance
   and admin limits as any client's. The admin role creates it and still can't
   read what is in it.
+
+## Admin audit (0006)
+
+- The admin role is "manage and audit only". It can read these provenance
+  columns and no others: `id`, `namespace_id`, `api_key_id`, `actor_id`,
+  `tool`, `client_name`, `client_version`, `transport`, `session_id`,
+  `request_id`, `source_kind`, `log_event_id`, `created_at`. That answers who
+  wrote, through which agent, client, tool and transport, where and when.
+- It still can't read `content_sha256` (a hash can confirm a guessed text),
+  `claimed` (free-form fields an agent sends), `source_ref` (it can name a
+  document), or any memory, embedding or graph row, and it can't write,
+  change or delete provenance.
+- `engramport admin audit` reads this trail together with the key lifecycle
+  (minted, revoked) it could already see.
 
 ## Run the tests locally
 

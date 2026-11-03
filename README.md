@@ -140,7 +140,7 @@ An extraction job (in progress) will read each new memory with a model and add t
 
 #### Sign in with Google (OAuth, preview)
 
-With `ENGRAMPORT_OAUTH=true`, a hosted server on the Postgres store lets claude.ai and other MCP clients connect without a pasted key. The client finds the sign-in from the 401 on `/mcp`, registers itself, and sends the person to sign in with Google (through Supabase Auth). The server then shows the namespaces that Google email is a member of; the person picks one, and the client gets a key for that namespace only, valid for an hour, with a refresh token that works once and is replaced each time. Reusing a code or a refresh token revokes the whole grant. Memberships are added and revoked with `engramport admin` (coming in the next change); the database rules are in `db/README.md`.
+With `ENGRAMPORT_OAUTH=true`, a hosted server on the Postgres store lets claude.ai and other MCP clients connect without a pasted key. The client finds the sign-in from the 401 on `/mcp`, registers itself, and sends the person to sign in with Google (through Supabase Auth). The server then shows the namespaces that Google email is a member of; the person picks one, and the client gets a key for that namespace only, valid for an hour, with a refresh token that works once and is replaced each time. Reusing a code or a refresh token revokes the whole grant. Memberships are added and revoked with `engramport admin member` (below); the database rules are in `db/README.md`.
 
 | Variable | Required | What it does |
 |---|---|---|
@@ -170,6 +170,18 @@ engramport admin key rotate ep_live_XXXXXXXXXXXX --grace 24h
 engramport admin key revoke ep_live_XXXXXXXXXXXX
 engramport admin audit --namespace acme --since 7d   # who wrote what, where and when
 ```
+
+People who connect a client such as claude.ai sign in with Google instead of pasting a key (migration 0009). You decide who may, one Google account, namespace and actor at a time:
+
+```bash
+engramport admin member add pilot@example.com --namespace acme/ops/pilot --actor claude
+engramport admin member list --namespace acme
+engramport admin connection list --email pilot@example.com
+engramport admin connection revoke <connection id>    # ends one client; they can connect again
+engramport admin member revoke pilot@example.com --namespace acme/ops/pilot
+```
+
+A member still signs in with that Google account and approves each connection, and gets no more than the member's scopes (`--read-only` gives read only). Revoking a member ends every connection and access token made through it, on their next request, and cannot be undone; add the member again to let them back. Listings show the client's name as it registered itself, quoted with any control or format characters spelled out, and never a token or its hash.
 
 A minted key is printed once, alone on stdout, so you can pipe it straight into your secrets manager; only its HMAC is stored. Rotation keeps the old key working for the grace period (`--grace 0` revokes it at once), and revoking or disabling an actor takes effect on the key's next request. Revoke and rotate take the key's prefix, never the whole key, so keys stay out of shell history. City and tower names must not name a client.
 

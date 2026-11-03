@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AdminClient, adminUrlProblems, parseDuration, runAdmin } from "../src/admin.ts";
+import { AdminClient, adminUrlProblems, clientName, parseDuration, runAdmin } from "../src/admin.ts";
 
 function capture() {
   const out: string[] = [];
@@ -70,4 +70,32 @@ test("audit usage errors exit 2 without touching the database", async () => {
     const c = capture();
     assert.equal(await runAdmin(argv, noDb, c.io), 2, argv.join(" "));
   }
+});
+
+test("member and connection usage errors and bad input exit before any database work", async () => {
+  for (const argv of [
+    ["member", "add", "a@example.com"],
+    ["member", "add", "--namespace", "c/t/x", "--actor", "claude"],
+    ["member", "revoke", "a@example.com"],
+    ["member", "list", "extra"],
+    ["connection", "revoke"],
+    ["connection", "list", "--bogus"],
+  ]) {
+    const c = capture();
+    assert.equal(await runAdmin(argv, noDb, c.io), 2, argv.join(" "));
+  }
+  for (const argv of [
+    ["member", "add", "not-an-email", "--namespace", "c/t/x", "--actor", "claude"],
+    ["member", "add", "a@example.com", "--namespace", "C/T", "--actor", "claude"],
+    ["member", "revoke", "a b@example.com", "--namespace", "c/t/x"],
+  ]) {
+    const c = capture();
+    assert.equal(await runAdmin(argv, noDb, c.io), 1, argv.join(" "));
+  }
+});
+
+test("client names are quoted with control and format characters spelled out", () => {
+  assert.equal(clientName("Claude"), '"Claude"');
+  assert.equal(clientName("Claude‮exe.txt"), '"Claude\\u202eexe.txt"');
+  assert.equal(clientName("a\nb​c"), '"a\\nb\\u200bc"');
 });

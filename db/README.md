@@ -142,7 +142,8 @@ Applying to a real project needs the owner's yes first.
   between the browser and these functions.
 - `oauth_members`: a verified Google email that may connect to one
   namespace, as one actor, with read or read+write scopes. The admin role adds
-  and revokes members; revoking one ends every grant made through it.
+  and revokes members (`engramport admin member`); revoking one ends every
+  grant made through it. `engramport admin connection` lists and revokes grants.
 - `oauth_clients`: clients that registered themselves (RFC 7591). Redirects
   are https, or http to this machine only, five at most.
 - `oauth_issue_code` checks, in the database, that the person signed in with

@@ -21,6 +21,7 @@
 import { config } from "../config.js";
 import * as eidetic from "../eidetic.js";
 import { executeStoreTool } from "./store.js";
+import { forPostgresStore } from "./store-definitions.js";
 
 // ── Tool Definitions ──────────────────────────────────────
 
@@ -31,7 +32,8 @@ const ENTITY_REF = {
 };
 
 
-export const toolDefinitions = [
+/** Every tool, as the old backend describes it. */
+export const allToolDefinitions = [
   {
     name: "remember",
     description:
@@ -395,6 +397,12 @@ export const toolDefinitions = [
     },
   },
 ];
+
+/**
+ * The tools this server lists. On the Postgres store, the ones it serves, as
+ * it actually behaves (see store-definitions.ts).
+ */
+export const toolDefinitions = config.store === "postgres" ? forPostgresStore(allToolDefinitions) : allToolDefinitions;
 
 // ── Tool Executor ─────────────────────────────────────────
 

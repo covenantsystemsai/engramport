@@ -13,7 +13,7 @@ import { createHash, randomBytes } from "node:crypto";
 import pg from "pg";
 
 import { AdminClient, AdminError, runAdmin } from "../src/admin.ts";
-import { parseKey } from "../src/keys.ts";
+import { hashKey, mintKey, parseKey } from "../src/keys.ts";
 import { PostgresStore, StoreError } from "../src/store/postgres.ts";
 
 const SUPER_URL = process.env.ENGRAMPORT_TEST_DATABASE_URL;
@@ -262,6 +262,110 @@ describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABA
     assert.ok(out.some((l) => l.includes(" write ") && l.includes(k.prefix) && l.includes("remember via stdio")), out.join("\n"));
     assert.ok(out.some((l) => l.includes("key minted") && l.includes(k.prefix)));
     assert.ok(out.every((l) => !l.includes("cli audit secret")));
+  });
+
+  /** As the superuser, a client and a connection for a member, and an access token on it, the way 0009's functions make them. */
+  async function connect(email: string, namespace: string, actor: string, clientName = "Claude") {
+    const clientId = `epc_${randomBytes(18).toString("hex").slice(0, 24)}`;
+    const cl = await superPool.query<{ id: string }>(
+      "INSERT INTO memory.oauth_clients (client_id, client_name, redirect_uris) VALUES ($1, $2, $3) RETURNING id",
+      [clientId, clientName, ["https://claude.ai/api/mcp/auth_callback"]],
+    );
+    const m = await superPool.query<{ id: string; namespace_id: string; actor_id: string }>(
+      `SELECT m.id, m.namespace_id, m.actor_id FROM memory.oauth_members m
+       JOIN memory.namespaces n ON n.id = m.namespace_id JOIN memory.actors a ON a.id = m.actor_id
+       WHERE m.email = $1 AND n.path = $2 AND a.slug = $3 AND m.revoked_at IS NULL`,
+      [email, namespace, actor],
+    );
+    const g = await superPool.query<{ id: string }>(
+      "INSERT INTO memory.oauth_grants (client_id, member_id, scopes, resource) VALUES ($1, $2, '{read,write}', 'https://mcp.example/mcp') RETURNING id",
+      [cl.rows[0].id, m.rows[0].id],
+    );
+    const token = mintKey();
+    await superPool.query(
+      `INSERT INTO memory.api_keys (namespace_id, actor_id, prefix, key_hash, scopes, expires_at, oauth_grant_id)
+       VALUES ($1, $2, $3, $4, '{read,write}', now() + interval '1 hour', $5)`,
+      [m.rows[0].namespace_id, m.rows[0].actor_id, token.prefix, hashKey(token.key, pepper), g.rows[0].id],
+    );
+    return { grantId: g.rows[0].id, token: token.key };
+  }
+
+  test("members are added once per namespace and actor, and only to what exists", async () => {
+    const email = `Pilot-${run}@Example.com`;
+    const m = await admin.addMember({ email, namespace: cell, actor: `claude-${run}` });
+    assert.deepEqual([m.email, m.namespace, m.actor, m.scopes, m.connections], [email.toLowerCase(), cell, `claude-${run}`, ["read", "write"], 0]);
+    await refused(admin.addMember({ email: email.toLowerCase(), namespace: cell, actor: `claude-${run}` }), /already a member/);
+    const ro = await admin.addMember({ email, namespace: cell, actor: `grok-${run}`, readOnly: true });
+    assert.deepEqual(ro.scopes, ["read"]);
+    await refused(admin.addMember({ email, namespace: `${city}/nope`, actor: `claude-${run}` }), /no namespace/);
+    await refused(admin.addMember({ email, namespace: cell, actor: "nobody-here" }), /no actor/);
+    await refused(admin.addMember({ email: "not-an-email", namespace: cell, actor: `claude-${run}` }), /not an email/);
+    await admin.setActorDisabled(`grok-${run}`, true);
+    try {
+      await refused(admin.addMember({ email: `other-${run}@example.com`, namespace: cell, actor: `grok-${run}` }), /disabled/);
+    } finally {
+      await admin.setActorDisabled(`grok-${run}`, false);
+    }
+    const listed = await admin.listMembers({ namespace: city, email });
+    assert.deepEqual(listed.map((r) => r.actor).sort(), [`claude-${run}`, `grok-${run}`].sort());
+  });
+
+  test("revoking a member ends its connections and their tokens, and cannot be undone", async () => {
+    const email = `revoke-${run}@example.com`;
+    await admin.addMember({ email, namespace: cell, actor: `claude-${run}` });
+    const { grantId, token } = await connect(email, cell, `claude-${run}`);
+    assert.ok(await store.remember(token, { content: "connected before revoke" }));
+    const [before] = await admin.listMembers({ email });
+    assert.equal(before.connections, 1);
+    assert.ok((await admin.listConnections({ email })).some((g) => g.id === grantId));
+
+    await refused(admin.revokeMember({ email, namespace: `${city}/tower/cell-2` }), /no active membership/);
+    const [gone] = await admin.revokeMember({ email, namespace: cell });
+    assert.ok(gone.revoked_at);
+    assert.equal(gone.connections, 0);
+    await storeFails(store.remember(token, { content: "should not land" }), "unauthorized");
+    const [conn] = await admin.listConnections({ email, includeRevoked: true });
+    assert.deepEqual([conn.id, conn.revoke_reason], [grantId, "member_revoked"]);
+    assert.equal((await admin.listMembers({ email })).length, 0);
+    assert.equal((await admin.listMembers({ email, includeRevoked: true })).length, 1);
+    await refused(admin.revokeMember({ email, namespace: cell }), /no active membership/);
+  });
+
+  test("revoking one connection keeps the membership, so the person can connect again", async () => {
+    const email = `conn-${run}@example.com`;
+    await admin.addMember({ email, namespace: cell, actor: `claude-${run}` });
+    const a = await connect(email, cell, `claude-${run}`);
+    const b = await connect(email, cell, `claude-${run}`, "Desktop");
+    const g = await admin.revokeConnection(a.grantId);
+    assert.deepEqual([g.revoke_reason, g.client], ["admin_revoked", "Claude"]);
+    await storeFails(store.remember(a.token, { content: "should not land" }), "unauthorized");
+    assert.ok(await store.remember(b.token, { content: "the other connection still works" }));
+    assert.equal((await admin.listMembers({ email }))[0].connections, 1);
+    await refused(admin.revokeConnection(a.grantId), /already revoked/);
+    await refused(admin.revokeConnection("00000000-0000-0000-0000-000000000000"), /no connection/);
+    await refused(admin.revokeConnection("not-a-uuid"), /not a connection id/);
+  });
+
+  test("the member and connection commands print metadata and spell out odd client names", async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const io = { out: (l: string) => out.push(l), err: (l: string) => err.push(l) };
+    const open = () => new AdminClient(new pg.Pool({ connectionString: urlAs(opsRole, "ops-test-only") }), pepper);
+    const email = `cli-${run}@example.com`;
+    assert.equal(await runAdmin(["member", "add", email, "--namespace", cell, "--actor", `claude-${run}`, "--read-only"], open, io), 0, err.join("\n"));
+    assert.match(out.at(-1)!, new RegExp(`^${email} may connect to ${cell} as claude-${run} \\(read\\)$`));
+    const { grantId } = await connect(email, cell, `claude-${run}`, "Claude\u202Egnp.exe");
+    out.length = 0;
+    assert.equal(await runAdmin(["connection", "list", "--email", email], open, io), 0, err.join("\n"));
+    assert.equal(out.length, 1);
+    assert.ok(out[0].startsWith(grantId) && out[0].includes('"Claude\\u202egnp.exe"'), out[0]);
+    assert.ok(!out[0].includes("\u202E"));
+    out.length = 0;
+    assert.equal(await runAdmin(["member", "list", "--namespace", cell, "--email", email], open, io), 0);
+    assert.match(out[0], /active, 1 connection$/);
+    assert.equal(await runAdmin(["member", "revoke", email, "--namespace", cell, "--actor", `claude-${run}`], open, io), 0);
+    assert.match(out.at(-1)!, /can no longer connect/);
+    assert.equal(await runAdmin(["member", "revoke", email, "--namespace", cell], open, io), 1);
   });
 
   test("the command line prints a minted key alone on stdout", async () => {

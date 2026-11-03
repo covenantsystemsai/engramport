@@ -84,6 +84,32 @@ export interface AuditFilter {
   writesOnly?: boolean;
 }
 
+/** Who may connect through OAuth (0009): a Google account, one namespace, one actor. */
+export interface MemberRow {
+  email: string;
+  namespace: string;
+  actor: string;
+  scopes: string[];
+  created_at: Date;
+  revoked_at: Date | null;
+  /** Connections made through this membership that still work. */
+  connections: number;
+}
+
+/** A connection a member approved for one client, such as claude.ai. Never a token or its hash. */
+export interface ConnectionRow {
+  id: string;
+  client: string;
+  email: string;
+  namespace: string;
+  actor: string;
+  scopes: string[];
+  created_at: Date;
+  revoked_at: Date | null;
+  revoke_reason: string | null;
+  last_used_at: Date | null;
+}
+
 export interface MintedKey {
   key: string;
   prefix: string;
@@ -144,6 +170,17 @@ function checkPrefix(prefix: string): void {
   if (!prefix.startsWith(KEY_PREFIX) || !/^[A-Za-z0-9_]{8,32}$/.test(prefix)) {
     throw new AdminError(`not a key prefix: ${prefix}`);
   }
+}
+
+// The same rule the database applies to oauth_members.email (0009).
+const EMAIL = /^[^@\s\p{Cc}]+@[^@\s\p{Cc}]+\.[^@\s\p{Cc}]+$/u;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** Lowercases an email and checks it, or refuses it. */
+function checkEmail(email: string): string {
+  const e = email.trim().toLowerCase();
+  if (e.length > 254 || !EMAIL.test(e)) throw new AdminError(`not an email address: ${email}`);
+  return e;
 }
 
 export class AdminClient {
@@ -487,6 +524,148 @@ export class AdminClient {
     });
   }
 
+  /**
+   * Lets a Google account connect to one namespace as one actor, through
+   * OAuth (0009). Read and write unless `readOnly`. The person still signs in
+   * with Google and approves each connection; this only says who may.
+   */
+  async addMember(opts: { email: string; namespace: string; actor: string; readOnly?: boolean }): Promise<MemberRow> {
+    const email = checkEmail(opts.email);
+    checkPath(opts.namespace);
+    checkSlug(opts.actor, "actor name");
+    const scopes = opts.readOnly ? ["read"] : ["read", "write"];
+    return this.tx(async (c) => {
+      const ns = await c.query<{ id: string }>("SELECT id FROM memory.namespaces WHERE path = $1", [opts.namespace]);
+      if (!ns.rows[0]) throw new AdminError(`no namespace ${opts.namespace}`);
+      const actor = await c.query<{ id: string; disabled_at: Date | null }>(
+        "SELECT id, disabled_at FROM memory.actors WHERE slug = $1",
+        [opts.actor],
+      );
+      if (!actor.rows[0]) throw new AdminError(`no actor ${opts.actor}`);
+      if (actor.rows[0].disabled_at) throw new AdminError(`actor ${opts.actor} is disabled`);
+      const exists = await c.query(
+        "SELECT 1 FROM memory.oauth_members WHERE email = $1 AND namespace_id = $2 AND actor_id = $3 AND revoked_at IS NULL",
+        [email, ns.rows[0].id, actor.rows[0].id],
+      );
+      if (exists.rowCount) {
+        throw new AdminError(`${email} is already a member of ${opts.namespace} as ${opts.actor}; revoke it first to change it`);
+      }
+      const r = await c.query<{ id: string }>(
+        "INSERT INTO memory.oauth_members (email, namespace_id, actor_id, scopes) VALUES ($1, $2, $3, $4) RETURNING id",
+        [email, ns.rows[0].id, actor.rows[0].id, scopes],
+      );
+      return (await this.members(c, { id: r.rows[0].id, includeRevoked: true }))[0];
+    });
+  }
+
+  async listMembers(opts: { namespace?: string; email?: string; includeRevoked?: boolean } = {}): Promise<MemberRow[]> {
+    if (opts.namespace) checkPath(opts.namespace);
+    const email = opts.email === undefined ? undefined : checkEmail(opts.email);
+    return this.tx((c) => this.members(c, { namespace: opts.namespace, email, includeRevoked: opts.includeRevoked }));
+  }
+
+  /**
+   * Ends a membership. Every connection made through it is revoked with it,
+   * and so is every access token those connections hold (0009's triggers), so
+   * the person's clients stop working on their next request. Without `actor`
+   * it ends each of the email's memberships in the namespace.
+   */
+  async revokeMember(opts: { email: string; namespace: string; actor?: string }): Promise<MemberRow[]> {
+    const email = checkEmail(opts.email);
+    checkPath(opts.namespace);
+    if (opts.actor !== undefined) checkSlug(opts.actor, "actor name");
+    return this.tx(async (c) => {
+      const ns = await c.query("SELECT 1 FROM memory.namespaces WHERE path = $1", [opts.namespace]);
+      if (!ns.rowCount) throw new AdminError(`no namespace ${opts.namespace}`);
+      const ids = await c.query<{ id: string }>(
+        `SELECT m.id FROM memory.oauth_members m
+         JOIN memory.namespaces n ON n.id = m.namespace_id
+         JOIN memory.actors a ON a.id = m.actor_id
+         WHERE m.email = $1 AND n.path = $2 AND ($3::text IS NULL OR a.slug = $3) AND m.revoked_at IS NULL`,
+        [email, opts.namespace, opts.actor ?? null],
+      );
+      if (!ids.rowCount) {
+        throw new AdminError(
+          `${email} has no active membership in ${opts.namespace}${opts.actor ? ` as ${opts.actor}` : ""}`,
+        );
+      }
+      const list = ids.rows.map((r) => r.id);
+      await c.query("UPDATE memory.oauth_members SET revoked_at = now() WHERE id = ANY ($1::uuid[]) AND revoked_at IS NULL", [list]);
+      const out: MemberRow[] = [];
+      for (const id of list) out.push(...(await this.members(c, { id, includeRevoked: true })));
+      return out;
+    });
+  }
+
+  /** Connections people approved: which client, as which member, and whether it still works. */
+  async listConnections(opts: { namespace?: string; email?: string; includeRevoked?: boolean } = {}): Promise<ConnectionRow[]> {
+    if (opts.namespace) checkPath(opts.namespace);
+    const email = opts.email === undefined ? undefined : checkEmail(opts.email);
+    return this.tx((c) => this.connections(c, { namespace: opts.namespace, email, includeRevoked: opts.includeRevoked }));
+  }
+
+  /** Ends one connection and its access tokens, and keeps the membership, so the person can connect again. */
+  async revokeConnection(id: string): Promise<ConnectionRow> {
+    if (!UUID.test(id)) throw new AdminError(`not a connection id: ${id} (copy it from connection list)`);
+    return this.tx(async (c) => {
+      const r = await c.query<{ revoked_at: Date | null }>("SELECT revoked_at FROM memory.oauth_grants WHERE id = $1", [id]);
+      if (!r.rows[0]) throw new AdminError(`no connection ${id}`);
+      if (r.rows[0].revoked_at) throw new AdminError(`connection ${id} was already revoked`);
+      const done = await c.query(
+        "UPDATE memory.oauth_grants SET revoked_at = now(), revoke_reason = 'admin_revoked' WHERE id = $1 AND revoked_at IS NULL",
+        [id],
+      );
+      if (!done.rowCount) throw new AdminError(`connection ${id} was already revoked`);
+      return (await this.connections(c, { id, includeRevoked: true }))[0];
+    });
+  }
+
+  private async members(
+    c: pg.PoolClient,
+    f: { id?: string; namespace?: string; email?: string; includeRevoked?: boolean },
+  ): Promise<MemberRow[]> {
+    return (
+      await c.query<MemberRow>(
+        `SELECT m.email, n.path AS namespace, a.slug AS actor, m.scopes, m.created_at, m.revoked_at,
+                (SELECT count(*)::int FROM memory.oauth_grants g WHERE g.member_id = m.id AND g.revoked_at IS NULL)
+                  AS connections
+         FROM memory.oauth_members m
+         JOIN memory.namespaces n ON n.id = m.namespace_id
+         JOIN memory.actors a ON a.id = m.actor_id
+         WHERE ($1::uuid IS NULL OR m.id = $1)
+           AND ($2::text IS NULL OR n.path = $2 OR starts_with(n.path, $2 || '/'))
+           AND ($3::text IS NULL OR m.email = $3)
+           AND ($4 OR m.revoked_at IS NULL)
+         ORDER BY n.path, m.email, a.slug, m.created_at`,
+        [f.id ?? null, f.namespace ?? null, f.email ?? null, f.includeRevoked ?? false],
+      )
+    ).rows;
+  }
+
+  private async connections(
+    c: pg.PoolClient,
+    f: { id?: string; namespace?: string; email?: string; includeRevoked?: boolean },
+  ): Promise<ConnectionRow[]> {
+    return (
+      await c.query<ConnectionRow>(
+        `SELECT g.id, cl.client_name AS client, m.email, n.path AS namespace, a.slug AS actor, g.scopes,
+                g.created_at, g.revoked_at, g.revoke_reason,
+                (SELECT max(k.last_used_at) FROM memory.api_keys k WHERE k.oauth_grant_id = g.id) AS last_used_at
+         FROM memory.oauth_grants g
+         JOIN memory.oauth_clients cl ON cl.id = g.client_id
+         JOIN memory.oauth_members m ON m.id = g.member_id
+         JOIN memory.namespaces n ON n.id = m.namespace_id
+         JOIN memory.actors a ON a.id = m.actor_id
+         WHERE ($1::uuid IS NULL OR g.id = $1)
+           AND ($2::text IS NULL OR n.path = $2 OR starts_with(n.path, $2 || '/'))
+           AND ($3::text IS NULL OR m.email = $3)
+           AND ($4 OR g.revoked_at IS NULL)
+         ORDER BY n.path, m.email, g.created_at`,
+        [f.id ?? null, f.namespace ?? null, f.email ?? null, f.includeRevoked ?? false],
+      )
+    ).rows;
+  }
+
   private async keyByPrefix(c: pg.PoolClient, prefix: string): Promise<KeyRow> {
     const r = await c.query<KeyRow>(
       `SELECT k.prefix, n.path AS namespace, a.slug AS actor, k.scopes, k.created_at, k.expires_at,
@@ -521,6 +700,17 @@ export const ADMIN_USAGE = `Usage: engramport admin <command>
                                      --grace 0 revokes the old key at once; the new
                                      key gets the old one's lifetime unless told
   key revoke <prefix>
+  member add <email> --namespace <path> --actor <name> [--read-only]
+                                     lets that Google account connect a client such
+                                     as claude.ai to the namespace as the actor; the
+                                     person still signs in and approves each one
+  member list [--namespace <path>] [--email <email>] [--all]
+  member revoke <email> --namespace <path> [--actor <name>]
+                                     ends the membership and every connection and
+                                     token made through it
+  connection list [--namespace <path>] [--email <email>] [--all]
+  connection revoke <id>             ends one connection and its tokens; the
+                                     membership stays, so they can connect again
   audit [--namespace <path>] [--actor <name>] [--since 7d] [--limit 100] [--writes-only]
                                      newest first: who wrote, through which client,
                                      tool and transport, where and when, and every
@@ -566,6 +756,14 @@ function parseFlags(args: string[], allowed: Record<string, "value" | "bool">): 
 }
 
 class UsageError extends Error {}
+
+/**
+ * A client registers its own name, so print it quoted with every control,
+ * format or unassigned character spelled out: a name cannot fake a line or
+ * reorder the text around it.
+ */
+export const clientName = (name: string): string =>
+  JSON.stringify(name).replace(/\p{C}/gu, (ch) => `\\u${ch.codePointAt(0)!.toString(16).padStart(4, "0")}`);
 
 const when = (d: Date | null): string => (d ? d.toISOString().replace(/\.\d{3}Z$/, "Z") : "-");
 
@@ -721,6 +919,74 @@ export async function runAdmin(argv: string[], open: () => AdminClient, io: Admi
         checkPrefix(prefix);
         const k = await db().revokeKey(prefix);
         io.out(`${k.prefix} (${k.actor} in ${k.namespace}) is revoked; it stops working on its next request`);
+        return 0;
+      }
+      case "member add": {
+        const { positional, flags } = parseFlags(rest, { namespace: "value", actor: "value", "read-only": "bool" });
+        const email = one(positional, "email address");
+        if (typeof flags.namespace !== "string" || typeof flags.actor !== "string") {
+          throw new UsageError("--namespace and --actor are required");
+        }
+        checkEmail(email);
+        checkPath(flags.namespace);
+        const m = await db().addMember({ email, namespace: flags.namespace, actor: flags.actor, readOnly: flags["read-only"] === true });
+        io.out(`${m.email} may connect to ${m.namespace} as ${m.actor} (${m.scopes.join(", ")})`);
+        return 0;
+      }
+      case "member list": {
+        const { positional, flags } = parseFlags(rest, { namespace: "value", email: "value", all: "bool" });
+        if (positional.length) throw new UsageError(`unexpected argument ${positional[0]}`);
+        const rows = await db().listMembers({
+          namespace: typeof flags.namespace === "string" ? flags.namespace : undefined,
+          email: typeof flags.email === "string" ? flags.email : undefined,
+          includeRevoked: flags.all === true,
+        });
+        for (const m of rows) {
+          const state = m.revoked_at ? `revoked ${when(m.revoked_at)}` : `active, ${m.connections} connection${m.connections === 1 ? "" : "s"}`;
+          io.out(`${m.email}  ${m.namespace}  ${m.actor}  ${m.scopes.join(",")}  ${state}`);
+        }
+        if (!rows.length) io.err(flags.all ? "No members." : "No active members. Add --all to include revoked ones.");
+        return 0;
+      }
+      case "member revoke": {
+        const { positional, flags } = parseFlags(rest, { namespace: "value", actor: "value" });
+        const email = one(positional, "email address");
+        if (typeof flags.namespace !== "string") throw new UsageError("--namespace is required");
+        checkEmail(email);
+        checkPath(flags.namespace);
+        const rows = await db().revokeMember({
+          email,
+          namespace: flags.namespace,
+          actor: typeof flags.actor === "string" ? flags.actor : undefined,
+        });
+        for (const m of rows) {
+          io.out(`${m.email} can no longer connect to ${m.namespace} as ${m.actor}; its connections and tokens are revoked`);
+        }
+        return 0;
+      }
+      case "connection list": {
+        const { positional, flags } = parseFlags(rest, { namespace: "value", email: "value", all: "bool" });
+        if (positional.length) throw new UsageError(`unexpected argument ${positional[0]}`);
+        const rows = await db().listConnections({
+          namespace: typeof flags.namespace === "string" ? flags.namespace : undefined,
+          email: typeof flags.email === "string" ? flags.email : undefined,
+          includeRevoked: flags.all === true,
+        });
+        for (const g of rows) {
+          const state = g.revoked_at ? `revoked ${when(g.revoked_at)} (${g.revoke_reason})` : "active";
+          io.out(
+            `${g.id}  ${clientName(g.client)}  ${g.email}  ${g.namespace}  ${g.actor}  ${g.scopes.join(",")}  ` +
+              `${state}  last used ${when(g.last_used_at)}`,
+          );
+        }
+        if (!rows.length) io.err(flags.all ? "No connections." : "No active connections. Add --all to include revoked ones.");
+        return 0;
+      }
+      case "connection revoke": {
+        const { positional } = parseFlags(rest, {});
+        const id = one(positional, "connection id");
+        const g = await db().revokeConnection(id);
+        io.out(`connection ${g.id} (${clientName(g.client)} for ${g.email} in ${g.namespace}) is revoked; its tokens stop working on their next request`);
         return 0;
       }
       default:

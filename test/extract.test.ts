@@ -31,6 +31,16 @@ describe("cleanExtraction", () => {
     assert.deepEqual(r.entities, [{ name: "Grok Bot", type: "agent" }]);
   });
 
+  test("text Postgres cannot hold, such as NUL, is dropped", () => {
+    const r = cleanExtraction({
+      entities: [
+        { name: "Bad\u0000Name", type: "agent" },
+        { name: "Grok Bot", type: "agent", description: "has a \u0000 in it" },
+      ],
+    }, text);
+    assert.deepEqual(r.entities, [{ name: "Grok Bot", type: "agent" }]);
+  });
+
   test("evidence must be in the memory word for word", () => {
     const r = cleanExtraction({
       relations: [

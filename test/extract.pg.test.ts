@@ -249,6 +249,31 @@ describe("extraction job", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
     assert.equal(byMem[m3.id], "timeout");
   });
 
+  test("the attempt limit holds across jobs running at once", async () => {
+    const text = `fails under two jobs ${run}`;
+    const m = await store.remember(keys.cell1, { content: text });
+    const a = fakeExtractor("fail/v3", { [text]: new ExtractorError("timeout") });
+    const b = fakeExtractor("fail/v3", { [text]: new ExtractorError("timeout") });
+    await Promise.all([
+      jobStore.extract(keys.cell1, a, { limit: 500, maxAttempts: 1 }),
+      jobStore.extract(keys.cell1, b, { limit: 500, maxAttempts: 1 }),
+    ]);
+    const runs = await admin.query("SELECT 1 FROM memory.extraction_runs WHERE memory_id = $1", [m.id]);
+    assert.equal(runs.rowCount, 1, "one attempt recorded, however many jobs tried");
+  });
+
+  test("a name with NUL is dropped and the pass goes on", async () => {
+    const text = `nul in a name ${run}`;
+    const m = await store.remember(keys.cell1, { content: text });
+    const x = fakeExtractor("nul/v1", { [text]: { entities: [{ name: "Bad\u0000Name", type: "concept" }] } });
+    const r = await jobStore.extract(keys.cell1, x, { limit: 500 });
+    assert.equal(r.failed, 0);
+    const runs = await admin.query<{ status: string }>(
+      "SELECT status::text FROM memory.extraction_runs WHERE memory_id = $1", [m.id],
+    );
+    assert.deepEqual(runs.rows, [{ status: "done" }]);
+  });
+
   test("retracted memories are skipped and the limit caps one pass", async () => {
     const gone = `retracted before reading ${run}`;
     const m = await store.remember(keys.cell1, { content: gone });

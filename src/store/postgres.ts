@@ -620,7 +620,7 @@ export class PostgresStore {
         found = cleanExtraction(await extractor.extract({ text: m.content, kind: m.kind }), m.content);
       } catch (err) {
         const errorClass = err instanceof ExtractorError ? err.errorClass : "error";
-        if (await this.recordRun(rawKey, extractor.id, m.id, { status: "failed", errorClass })) summary.failed += 1;
+        if (await this.recordRun(rawKey, extractor.id, m.id, maxAttempts, errorClass)) summary.failed += 1;
         else summary.skipped += 1;
         continue;
       }
@@ -628,10 +628,15 @@ export class PostgresStore {
       try {
         wrote = await this.writeExtraction(rawKey, extractor.id, m.id, found);
       } catch (err) {
-        if (!(err instanceof StoreError)) throw err;
-        if (await this.recordRun(rawKey, extractor.id, m.id, { status: "failed", errorClass: err.code })) {
-          summary.failed += 1;
-        } else summary.skipped += 1;
+        // A store refusal, or data Postgres rejects (class 22, such as a value
+        // it cannot hold), fails this memory only. Anything else, such as a
+        // lost connection, stops the pass.
+        const sqlstate = (err as { code?: unknown }).code;
+        const errorClass = err instanceof StoreError ? err.code
+          : typeof sqlstate === "string" && sqlstate.startsWith("22") ? "bad_output" : null;
+        if (!errorClass) throw err;
+        if (await this.recordRun(rawKey, extractor.id, m.id, maxAttempts, errorClass)) summary.failed += 1;
+        else summary.skipped += 1;
         continue;
       }
       if (!wrote) {
@@ -645,15 +650,25 @@ export class PostgresStore {
     return summary;
   }
 
-  /** The memory is still active and not yet finished by this extractor. */
-  private static async stillPending(c: pg.PoolClient, ctx: KeyContext, extractorId: string, memoryId: string) {
+  /**
+   * The memory is still active, not yet finished by this extractor, and, when
+   * maxAttempts is given, has failed fewer times than that. The row lock makes
+   * jobs on the same memory take turns, so the check holds for the write.
+   */
+  private static async stillPending(
+    c: pg.PoolClient, ctx: KeyContext, extractorId: string, memoryId: string, maxAttempts?: number,
+  ) {
+    await c.query("SELECT 1 FROM memory.memories WHERE id = $1 AND namespace_id = $2 FOR UPDATE", [
+      memoryId, ctx.namespaceId,
+    ]);
     const r = await c.query(
       `SELECT 1 FROM memory.memories m
        WHERE m.id = $1 AND m.namespace_id = $2 AND m.status = 'active'
          AND NOT EXISTS (SELECT 1 FROM memory.extraction_runs r
                          WHERE r.memory_id = m.id AND r.extractor = $3 AND r.status = 'done')
-       FOR UPDATE OF m`,
-      [memoryId, ctx.namespaceId, extractorId],
+         AND ($4::int IS NULL OR (SELECT count(*) FROM memory.extraction_runs r
+              WHERE r.memory_id = m.id AND r.extractor = $3 AND r.status = 'failed') < $4::int)`,
+      [memoryId, ctx.namespaceId, extractorId, maxAttempts ?? null],
     );
     return Boolean(r.rowCount);
   }
@@ -698,18 +713,22 @@ export class PostgresStore {
     }
   }
 
-  /** Returns false when there was nothing left to record against. */
+  /**
+   * Record a failed read. Returns false when there was nothing left to record
+   * against: the memory was retracted or finished meanwhile, or other jobs
+   * already used up its attempts.
+   */
   private async recordRun(
-    rawKey: string, extractorId: string, memoryId: string, run: { status: "failed"; errorClass: string },
+    rawKey: string, extractorId: string, memoryId: string, maxAttempts: number, errorClass: string,
   ): Promise<boolean> {
     return this.withKey(rawKey, async (c, ctx) => {
       PostgresStore.requireWrite(ctx);
-      if (!(await PostgresStore.stillPending(c, ctx, extractorId, memoryId))) return false;
+      if (!(await PostgresStore.stillPending(c, ctx, extractorId, memoryId, maxAttempts))) return false;
       const provenanceId = await PostgresStore.extractProvenance(c, extractorId);
       await c.query(
         `INSERT INTO memory.extraction_runs (namespace_id, memory_id, extractor, status, error_class, provenance_id)
-         VALUES ($1, $2, $3, $4::memory.extraction_status, $5, $6)`,
-        [ctx.namespaceId, memoryId, extractorId, run.status, run.errorClass, provenanceId],
+         VALUES ($1, $2, $3, 'failed', $4, $5)`,
+        [ctx.namespaceId, memoryId, extractorId, errorClass, provenanceId],
       );
       return true;
     });

@@ -73,8 +73,11 @@ function slug(value: unknown, pattern: RegExp): string | null {
   return pattern.test(s) ? s : null;
 }
 
+/** Control characters, NUL included, which Postgres text cannot hold. */
+const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+
 function name(value: unknown): string | null {
-  if (typeof value !== "string") return null;
+  if (typeof value !== "string" || CONTROL.test(value)) return null;
   const s = value.normalize("NFKC").replace(/\s+/g, " ").trim();
   return s.length >= 1 && s.length <= MAX_NAME ? s : null;
 }
@@ -110,7 +113,8 @@ export function cleanExtraction(raw: unknown, text: string): Extraction {
     const e = ref(item);
     if (!e || entities.has(key(e.name, e.type))) continue;
     const d = (item as Record<string, unknown>).description;
-    const description = typeof d === "string" && d.trim() && d.length <= MAX_DESCRIPTION ? d.trim() : undefined;
+    const description =
+      typeof d === "string" && d.trim() && d.length <= MAX_DESCRIPTION && !CONTROL.test(d) ? d.trim() : undefined;
     entities.set(key(e.name, e.type), description ? { ...e, description } : e);
   }
 

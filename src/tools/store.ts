@@ -15,11 +15,11 @@ import { backendKey } from "../caller.js";
 import { openAIEmbedder } from "../embeddings.js";
 import { decodePepper } from "../keys.js";
 import type { LinkInput } from "../store/graph.js";
+import { NOT_ON_POSTGRES } from "./store-definitions.js";
 import { createPool, MEMORY_KINDS, MemoryKind, PostgresStore, RECALL_MODES, RecallMode, StoreError } from "../store/postgres.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 
-const NOT_YET = new Set(["chat", "groom", "dream", "export_graph"]);
 
 let shared: PostgresStore | undefined;
 let sharedPg: pg.Pool | undefined;
@@ -157,7 +157,7 @@ export async function executeStoreTool(
           namespace,
         }));
       default:
-        if (NOT_YET.has(name)) return fail(`${name} is not available on the Postgres store yet`, "not_available");
+        if (NOT_ON_POSTGRES.has(name)) return fail(`${name} is not available on the Postgres store yet`, "not_available");
         return fail(`Unknown tool: ${name}`, "invalid");
     }
   } catch (err) {

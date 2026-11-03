@@ -96,3 +96,44 @@ RESET ROLE;
 SET ROLE authenticated;
 SELECT t.expect_denied('authenticated cannot read the model list', 'SELECT 1 FROM memory.embedding_models');
 RESET ROLE;
+
+\echo '-- an ancestor''s old-model embeddings stop being searched (0012)'
+\set k_c3 '00000000-0000-7000-8000-0000000000f3'
+RESET ROLE;
+UPDATE memory.namespaces SET embedding_model = 'gte-small' WHERE id = :'c3';
+SET ROLE engramport_app;
+BEGIN; SELECT t.as_key(:'k_c3', :'c3');
+SELECT t.expect_count('a gte-small cell finds its tower''s gte-small memory by meaning',
+  format($$SELECT 1 FROM memory.vector_search(('[' || array_to_string(array_fill(0.05::real, ARRAY[384]), ',') || ']')::extensions.halfvec,
+             'gte-small') WHERE memory_id = %L$$, :'tb_mem'), 1);
+COMMIT;
+RESET ROLE;
+UPDATE memory.namespaces SET embedding_model = 'text-embedding-3-small' WHERE id = :'tb';
+SET ROLE engramport_app;
+BEGIN; SELECT t.as_key(:'k_c3', :'c3');
+SELECT t.expect_count('once the tower changes model, vector search no longer finds it',
+  format($$SELECT 1 FROM memory.vector_search(('[' || array_to_string(array_fill(0.05::real, ARRAY[384]), ',') || ']')::extensions.halfvec,
+             'gte-small') WHERE memory_id = %L$$, :'tb_mem'), 0);
+SELECT t.expect_count('nor does hybrid search by meaning',
+  format($$SELECT 1 FROM memory.search('unrelated words', ('[' || array_to_string(array_fill(0.05::real, ARRAY[384]), ',') || ']')::extensions.halfvec,
+             'gte-small', p_retrievers => ARRAY['vector']) WHERE memory_id = %L$$, :'tb_mem'), 0);
+SELECT t.expect_count('the memory itself is still readable', format('SELECT 1 FROM memory.memories WHERE id = %L', :'tb_mem'), 1);
+COMMIT;
+RESET ROLE;
+UPDATE memory.namespaces SET embedding_model = NULL WHERE id = :'tb';
+SET ROLE engramport_app;
+BEGIN; SELECT t.as_key(:'k_c3', :'c3');
+SELECT t.expect_count('nor once the tower stores no embeddings',
+  format($$SELECT 1 FROM memory.vector_search(('[' || array_to_string(array_fill(0.05::real, ARRAY[384]), ',') || ']')::extensions.halfvec,
+             'gte-small') WHERE memory_id = %L$$, :'tb_mem'), 0);
+COMMIT;
+RESET ROLE;
+UPDATE memory.namespaces SET embedding_model = 'gte-small' WHERE id = :'tb';
+SET ROLE engramport_app;
+BEGIN; SELECT t.as_key(:'k_c3', :'c3');
+SELECT t.expect_count('and switching the tower back makes it searchable again',
+  format($$SELECT 1 FROM memory.vector_search(('[' || array_to_string(array_fill(0.05::real, ARRAY[384]), ',') || ']')::extensions.halfvec,
+             'gte-small') WHERE memory_id = %L$$, :'tb_mem'), 1);
+COMMIT;
+RESET ROLE;
+UPDATE memory.namespaces SET embedding_model = 'test-model' WHERE id = :'c3';

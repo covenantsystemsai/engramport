@@ -135,6 +135,30 @@ Applying to a real project needs the owner's yes first.
 - It runs with the caller's rights, so row security decides every row; only
   `engramport_app` may run it, and the admin and API roles can't.
 
+## OAuth sign-in (0009)
+
+- The database half of OAuth 2.1 for claude.ai and other MCP clients. The
+  HTTP endpoints come in a later change.
+- `oauth_members`: a verified Google email that may connect to one
+  namespace, as one actor, with read or read+write scopes. The admin role adds
+  and revokes members; revoking one ends every grant made through it.
+- `oauth_clients`: clients that registered themselves (RFC 7591). Redirects
+  are https, or http to this machine only, five at most.
+- `oauth_issue_code` checks, in the database, that the person signed in with
+  Google through Supabase Auth in the last 15 minutes, with a verified email
+  that is the member's. So the server's own credentials can't issue a code
+  for anyone.
+- `oauth_exchange_code` checks the PKCE verifier (S256) and spends the code,
+  even on a failed try. A code used twice revokes what it was traded for.
+- The access token is an ordinary key that expires in an hour, tagged with
+  its grant, so row security, provenance and the audit work as for any key.
+  The refresh token lasts 30 days, works once and is replaced each time;
+  presenting a spent one revokes the whole grant.
+- Codes and refresh tokens are stored only as the server's HMAC. The server
+  role reaches these tables only through seven functions; the admin role sees
+  members, clients and grants, can revoke a grant, and never sees a code or a
+  token.
+
 ## Run the tests locally
 
 Needs Postgres 17 with pgvector 0.7 or later, as a database you can throw away:

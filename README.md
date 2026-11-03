@@ -134,6 +134,8 @@ Set `ENGRAMPORT_STORE=postgres` and the server reads and writes the memory schem
 
 Keep all of these in a secrets manager, never in a file in the repo. On this store `delete_memory` retracts: the memory stops coming back from recall but its text is kept for the record. `chat`, `groom`, `dream` and `export_graph` are not available on it yet. It also adds three knowledge-graph tools: `link` (assert entities, aliases, relations, which entities a memory mentions, and links between memories), `unlink` (retract one of them) and `get_entity` (an entity with its aliases, relations and the memories that mention it). They follow the same namespace rules as memories.
 
+An extraction job (in progress) will read each new memory with a model and add the entities and relations it finds to the graph, marked as extracted so they are never mistaken for an agent's own claims. Each memory is read once per extractor version, a near spelling of an entity the namespace can read is reused rather than duplicated, a quote is kept only if it is in the memory word for word, and a failure is stored as a short class such as `timeout`, never as the provider's message. The job runs only as a server-side job; no agent tool can start it or write extracted rows. Which model it uses is not settled yet, so it does not run anywhere today.
+
 #### Managing namespaces and keys
 
 `engramport admin` creates namespaces and actors and mints, rotates and revokes keys for this store. It also shows the audit trail. It runs as the `engramport_admin` database role, which can do exactly that and nothing more: it cannot read memories, embeddings, graph rows or stored key hashes, it sees provenance metadata but never content, and it cannot delete anything.

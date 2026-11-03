@@ -6,9 +6,10 @@
  * so row security decides what a key can see and where it can write. What is
  * checked here gives clearer errors; it is not what keeps namespaces apart.
  *
- * Name matching in this first version is exact after normalising case,
- * spacing and Unicode width (memory.norm_key), by name first and then by alias.
- * Fuzzy and embedding matches come with the extraction job.
+ * Name matching is exact after normalising case, spacing and Unicode width
+ * (memory.norm_key), by name first and then by alias. The extraction job adds
+ * a trigram match on top (fuzzy), so a near spelling of an entity it can read
+ * is reused rather than duplicated; agents' own link calls stay exact.
  */
 
 import type pg from "pg";
@@ -27,6 +28,9 @@ const MAX_RELATIONS = 100;
 const MAX_ALIASES = 20;
 const MAX_LINKS = 50;
 const MAX_NAME = 200;
+/** Trigram similarity a fuzzy match needs, and how far ahead of the next candidate. */
+export const FUZZY_MIN = 0.6;
+export const FUZZY_LEAD = 0.1;
 
 export interface EntityInput {
   name: string;
@@ -62,7 +66,21 @@ interface ResolvedEntity {
   type: string;
   namespace: string;
   namespace_id: string;
-  matched_by: "id" | "name" | "alias" | "new";
+  matched_by: "id" | "name" | "alias" | "fuzzy" | "new";
+}
+
+export type GraphOrigin = "asserted" | "extracted";
+
+/** How a link call writes. The defaults are what the link tool uses. */
+export interface LinkOptions {
+  /** 'extracted' needs a provenance with transport 'job' (the database checks). */
+  origin?: GraphOrigin;
+  /** Use this provenance row instead of recording a new one. */
+  provenanceId?: string;
+  /** Also match near spellings by trigram similarity. */
+  fuzzy?: boolean;
+  /** Drop a relation whose ends resolve to one entity instead of failing. */
+  skipSelfRelations?: boolean;
 }
 
 function fail(message: string): never {
@@ -186,18 +204,59 @@ async function findEntity(c: pg.PoolClient, ctx: KeyContext, ref: EntityRef): Pr
   return r.rows[0] ?? null;
 }
 
+/**
+ * A near spelling of the name, same type, among entities the key can read:
+ * by trigram similarity of the normalised name or an alias. Taken only when
+ * the best match is clearly ahead of the next candidate with a different name,
+ * so two close candidates never get merged by guess. The same name at two
+ * levels is one candidate, and the nearest level wins, as with exact names.
+ */
+async function findEntityFuzzy(c: pg.PoolClient, ctx: KeyContext, ref: { name: string; type: string }) {
+  const r = await c.query<ResolvedEntity & { sim: number; norm_key: string }>(
+    `${DEPTH}, cand AS (
+       SELECT e.id, extensions.similarity(e.norm_key, memory.norm_key($3)) AS sim
+       FROM memory.entities e
+       WHERE e.type = $2 AND e.status = 'active' AND e.norm_key OPERATOR(extensions.%) memory.norm_key($3)
+       UNION ALL
+       SELECT a.entity_id, extensions.similarity(a.norm_key, memory.norm_key($3))
+       FROM memory.entity_aliases a
+       WHERE a.norm_key OPERATOR(extensions.%) memory.norm_key($3)
+     ), best AS (
+       SELECT id, max(sim) AS sim FROM cand GROUP BY id
+     )
+     SELECT e.id, e.name, e.type, n.path AS namespace, e.namespace_id, 'fuzzy' AS matched_by,
+            b.sim, e.norm_key
+     FROM best b
+     JOIN memory.entities e ON e.id = b.id AND e.type = $2 AND e.status = 'active'
+     JOIN memory.namespaces n ON n.id = e.namespace_id
+     JOIN up ON up.id = e.namespace_id
+     ORDER BY b.sim DESC, up.depth, e.created_at
+     LIMIT 10`,
+    [ctx.namespaceId, ref.type, ref.name],
+  );
+  const best = r.rows[0];
+  if (!best || best.sim < FUZZY_MIN) return null;
+  const next = r.rows.find((row) => row.norm_key !== best.norm_key);
+  if (next && best.sim - next.sim < FUZZY_LEAD) return null;
+  return {
+    id: best.id, name: best.name, type: best.type, namespace: best.namespace,
+    namespace_id: best.namespace_id, matched_by: "fuzzy",
+  } satisfies ResolvedEntity;
+}
+
 async function createEntity(
   c: pg.PoolClient,
   ctx: KeyContext,
   provenanceId: string,
   e: { name: string; type: string; description?: string },
+  origin: GraphOrigin = "asserted",
 ): Promise<ResolvedEntity> {
   const ins = await c.query<{ id: string; name: string }>(
-    `INSERT INTO memory.entities (namespace_id, type, name, description, provenance_id)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO memory.entities (namespace_id, type, name, description, provenance_id, origin)
+     VALUES ($1, $2, $3, $4, $5, $6::memory.graph_origin)
      ON CONFLICT (namespace_id, type, norm_key) WHERE status = 'active' DO NOTHING
      RETURNING id, name`,
-    [ctx.namespaceId, e.type, e.name.trim(), e.description ?? null, provenanceId],
+    [ctx.namespaceId, e.type, e.name.trim(), e.description ?? null, provenanceId, origin],
   );
   if (ins.rows[0]) {
     return { ...ins.rows[0], type: e.type, namespace: ctx.namespace, namespace_id: ctx.namespaceId, matched_by: "new" };
@@ -220,8 +279,10 @@ export async function linkTx(
   ctx: KeyContext,
   transport: Transport,
   raw: LinkInput,
+  opts: LinkOptions = {},
 ) {
   const input = checkLinkInput(raw);
+  const origin = opts.origin ?? "asserted";
   if (input.memoryId) {
     const own = await c.query(
       "SELECT 1 FROM memory.memories WHERE id = $1 AND namespace_id = $2 AND status = 'active'",
@@ -229,11 +290,14 @@ export async function linkTx(
     );
     if (!own.rowCount) throw new StoreError("not_found", "memory_id must be an active memory in this key's own namespace");
   }
-  const prov = await c.query<{ id: string }>(
-    "SELECT memory.record_provenance(p_tool => 'link', p_transport => $1::memory.transport) AS id",
-    [transport],
-  );
-  const provenanceId = prov.rows[0].id;
+  const provenanceId =
+    opts.provenanceId ??
+    (
+      await c.query<{ id: string }>(
+        "SELECT memory.record_provenance(p_tool => 'link', p_transport => $1::memory.transport) AS id",
+        [transport],
+      )
+    ).rows[0].id;
 
   const resolved = new Map<string, ResolvedEntity>();
   const out: Array<ResolvedEntity & { aliases_added: number }> = [];
@@ -242,9 +306,10 @@ export async function linkTx(
     const cached = resolved.get(key);
     if (cached) return cached;
     let ent = await findEntity(c, ctx, ref);
+    if (!ent && opts.fuzzy && !("id" in ref)) ent = await findEntityFuzzy(c, ctx, ref);
     if (!ent) {
       if ("id" in ref) throw new StoreError("not_found", `entity ${ref.id} not found`);
-      ent = await createEntity(c, ctx, provenanceId, { ...ref, ...extra });
+      ent = await createEntity(c, ctx, provenanceId, { ...ref, ...extra }, origin);
     }
     resolved.set(key, ent);
     resolved.set(`id:${ent.id}`, ent);
@@ -269,15 +334,18 @@ export async function linkTx(
   for (const r of input.relations) {
     const source = await resolve(r.source);
     const target = await resolve(r.target);
-    if (source.id === target.id) throw new StoreError("invalid", `${source.name} cannot relate to itself`);
+    if (source.id === target.id) {
+      if (opts.skipSelfRelations) continue;
+      throw new StoreError("invalid", `${source.name} cannot relate to itself`);
+    }
     const ins = await c.query<{ id: string }>(
       `INSERT INTO memory.relations (namespace_id, source_entity_id, predicate, target_entity_id,
-         confidence, evidence_memory_id, evidence_span, provenance_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         confidence, evidence_memory_id, evidence_span, provenance_id, origin)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::memory.graph_origin)
        ON CONFLICT (namespace_id, source_entity_id, predicate, target_entity_id) WHERE status = 'active' DO NOTHING
        RETURNING id`,
       [ctx.namespaceId, source.id, r.predicate, target.id, r.confidence ?? 1, input.memoryId ?? null,
-        r.evidence ?? null, provenanceId],
+        r.evidence ?? null, provenanceId, origin],
     );
     let id = ins.rows[0]?.id ?? null;
     if (!id) {
@@ -298,9 +366,9 @@ export async function linkTx(
       if (seen.has(ent.id)) continue;
       seen.add(ent.id);
       const m = await c.query(
-        `INSERT INTO memory.entity_mentions (memory_id, entity_id, namespace_id, provenance_id)
-         VALUES ($1, $2, $3, $4) ON CONFLICT (memory_id, entity_id) DO NOTHING`,
-        [input.memoryId, ent.id, ctx.namespaceId, provenanceId],
+        `INSERT INTO memory.entity_mentions (memory_id, entity_id, namespace_id, provenance_id, origin)
+         VALUES ($1, $2, $3, $4, $5::memory.graph_origin) ON CONFLICT (memory_id, entity_id) DO NOTHING`,
+        [input.memoryId, ent.id, ctx.namespaceId, provenanceId, origin],
       );
       mentions += m.rowCount ?? 0;
     }
@@ -311,11 +379,11 @@ export async function linkTx(
     const readable = await c.query("SELECT 1 FROM memory.memories WHERE id = $1 AND status = 'active'", [l.to]);
     if (!readable.rowCount) throw new StoreError("not_found", `memory ${l.to} not found`);
     const ins = await c.query<{ id: string }>(
-      `INSERT INTO memory.memory_links (namespace_id, from_memory_id, kind, to_memory_id, provenance_id)
-       VALUES ($1, $2, $3::memory.memory_link_kind, $4, $5)
+      `INSERT INTO memory.memory_links (namespace_id, from_memory_id, kind, to_memory_id, provenance_id, origin)
+       VALUES ($1, $2, $3::memory.memory_link_kind, $4, $5, $6::memory.graph_origin)
        ON CONFLICT (namespace_id, from_memory_id, kind, to_memory_id) WHERE status = 'active' DO NOTHING
        RETURNING id`,
-      [ctx.namespaceId, input.memoryId, l.kind, l.to, provenanceId],
+      [ctx.namespaceId, input.memoryId, l.kind, l.to, provenanceId, origin],
     );
     let id = ins.rows[0]?.id ?? null;
     if (!id) {

@@ -176,6 +176,8 @@ async function main(): Promise<void> {
   ];
 
   const results: Array<Record<string, unknown>> = [];
+  const keyOf = new Map(Object.entries(ids).map(([k, id]) => [id, k]));
+  const firstMisses: Array<Record<string, unknown>> = [];
   const embedMs: number[] = [];
   for (const [setName, questions] of Object.entries(sets)) {
     for (const r of retrievers) {
@@ -184,12 +186,34 @@ async function main(): Promise<void> {
       const misses: string[] = [];
       for (const q of questions) {
         const expect = q.expect.map((k) => ids[k]);
+        embedder.lastMs = Number.NaN;
         const t = performance.now();
         const out = await r.store.recall(keys.cell, { query: q.question, mode: r.mode, topK: K });
         recallMs.push(performance.now() - t);
-        if (r.embeds) embedMs.push(embedder.lastMs);
-        if (r.embeds && out.mode !== r.mode) throw new Error(`${r.name} fell back to ${out.mode}: ${out.warnings}`);
+        if (r.embeds) {
+          // A failed embedding leaves hybrid as hybrid but drops the vector
+          // retriever, so check for it and for any warning, not only the mode.
+          const usedVector = r.mode === "vector" || (out.retrievers ?? []).includes("vector");
+          if (out.mode !== r.mode || !usedVector || out.warnings?.length || Number.isNaN(embedder.lastMs)) {
+            throw new Error(`${r.name} did not search by meaning: ${out.warnings ?? out.mode}`);
+          }
+          embedMs.push(embedder.lastMs);
+        }
         const got = out.results.map((x) => x.id as string);
+        if (r.name === "hybrid (gte-small)" && got[0] !== expect[0]) {
+          firstMisses.push({
+            set: setName,
+            question: q.question,
+            expected: q.expect[0],
+            expected_rank: got.indexOf(expect[0]) + 1 || null,
+            top: out.results.slice(0, 3).map((x) => ({
+              key: keyOf.get(x.id as string),
+              kind: x.kind,
+              score: x.score,
+              by: x.retrieved_by,
+            })),
+          });
+        }
         r1 += recallAtK(got, expect, 1);
         r3 += recallAtK(got, expect, 3);
         r5 += recallAtK(got, expect, 5);
@@ -233,7 +257,10 @@ async function main(): Promise<void> {
   ];
   const report = lines.join("\n");
   console.log(report);
-  writeFileSync("bench-results.json", JSON.stringify({ timing, results }, null, 2));
+  writeFileSync("bench-results.json", JSON.stringify({ timing, results, hybrid_first_misses: firstMisses }, null, 2));
+  // Why hybrid ranked another memory first, for tuning the blend.
+  console.log(`\nHybrid (gte-small) questions whose first result was not the expected memory:`);
+  for (const m of firstMisses) console.log(JSON.stringify(m));
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${report}\n`);
 
   await appPool.end();

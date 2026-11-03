@@ -12,7 +12,7 @@ import type pg from "pg";
 
 import { config } from "../config.js";
 import { backendKey } from "../caller.js";
-import { openAIEmbedder } from "../embeddings.js";
+import { Embedder, openAIEmbedder, supabaseEmbedder } from "../embeddings.js";
 import { decodePepper } from "../keys.js";
 import type { LinkInput } from "../store/graph.js";
 import { NOT_ON_POSTGRES } from "./store-definitions.js";
@@ -30,6 +30,18 @@ export function sharedPool(): pg.Pool {
   return sharedPg;
 }
 
+/**
+ * The providers this server has. Each namespace's text goes only to the one
+ * for its own model, so adding an OpenAI key never sends a gte-small
+ * namespace's text to OpenAI.
+ */
+function configuredEmbedders(): Embedder[] {
+  return [
+    ...(config.embedUrl && config.embedSecret ? [supabaseEmbedder(config.embedUrl, config.embedSecret)] : []),
+    ...(config.openaiApiKey ? [openAIEmbedder(config.openaiApiKey)] : []),
+  ];
+}
+
 /** The process-wide store, built from config on first use. */
 export function sharedStore(): PostgresStore {
   if (!shared) {
@@ -37,7 +49,7 @@ export function sharedStore(): PostgresStore {
     if (!pepper) throw new Error("ENGRAMPORT_KEY_PEPPER is missing or too short");
     shared = new PostgresStore(sharedPool(), {
       pepper,
-      embedder: config.openaiApiKey ? openAIEmbedder(config.openaiApiKey) : undefined,
+      embedders: configuredEmbedders(),
       transport: config.mode === "stdio" ? "stdio" : "streamable_http",
     });
   }

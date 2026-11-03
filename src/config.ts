@@ -41,8 +41,18 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env) {
     /** Postgres store: pepper for key hashes, base64 or hex, at least 32 bytes. */
     keyPepper: env.ENGRAMPORT_KEY_PEPPER || "",
 
-    /** Postgres store: embedding provider key. Without it, recall is keyword only. */
+    /**
+     * Postgres store: OpenAI key, for namespaces set to text-embedding-3-small
+     * only. Their text is sent to OpenAI; no other namespace's is.
+     */
     openaiApiKey: env.OPENAI_API_KEY || "",
+
+    /**
+     * Postgres store: the embed Edge Function in the same Supabase project, for
+     * namespaces set to gte-small (the default), and its shared secret.
+     */
+    embedUrl: env.ENGRAMPORT_EMBED_URL || "",
+    embedSecret: env.ENGRAMPORT_EMBED_SECRET || "",
 
     /**
      * OAuth sign-in for hosted MCP clients (claude.ai). Off unless set to true.
@@ -170,7 +180,32 @@ function postgresProblems(cfg: Config, mode: "stdio" | "http"): string[] {
   if (!decodePepper(cfg.keyPepper)) {
     problems.push("ENGRAMPORT_KEY_PEPPER is not set or shorter than 32 bytes.");
   }
+  if (cfg.embedUrl || cfg.embedSecret) problems.push(...embedProblems(cfg));
   if (cfg.oauth) problems.push(...oauthProblems(cfg, mode));
+  return problems;
+}
+
+function embedProblems(cfg: Config): string[] {
+  const problems: string[] = [];
+  if (!cfg.embedUrl) problems.push("ENGRAMPORT_EMBED_SECRET is set but ENGRAMPORT_EMBED_URL is not.");
+  else {
+    let url: URL | undefined;
+    try {
+      url = new URL(cfg.embedUrl);
+    } catch {
+      problems.push("ENGRAMPORT_EMBED_URL is not a valid URL.");
+    }
+    if (url) {
+      const local = LOCAL_HOSTS.has(url.hostname);
+      if (url.protocol !== "https:" && !(local && cfg.allowLocalBackend && url.protocol === "http:")) {
+        problems.push("ENGRAMPORT_EMBED_URL must use https, so memory text never travels in clear text.");
+      }
+      if (url.search || url.hash || url.username || url.password) {
+        problems.push("ENGRAMPORT_EMBED_URL must be the function's address only, with no query or credentials.");
+      }
+    }
+  }
+  if (cfg.embedSecret.length < 32) problems.push("ENGRAMPORT_EMBED_SECRET is not set or shorter than 32 characters.");
   return problems;
 }
 
@@ -209,8 +244,10 @@ export function validateConfig(mode: "stdio" | "http" = config.mode): void {
     for (const p of problems) console.error(`[EngramPort] ${p}`);
     process.exit(1);
   }
-  if (config.store === "postgres" && !config.openaiApiKey) {
-    console.warn("[EngramPort] No OPENAI_API_KEY set — the Postgres store will use keyword search only");
+  if (config.store === "postgres" && !config.embedUrl) {
+    console.warn(
+      "[EngramPort] No ENGRAMPORT_EMBED_URL set: namespaces on Supabase's built-in model (the default) will use keyword and graph search only",
+    );
   }
   if (mode === "http") {
     // Hosted mode forwards each caller's own key; a server-wide key would give

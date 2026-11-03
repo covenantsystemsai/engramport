@@ -38,8 +38,13 @@ export interface NamespaceRow {
   path: string;
   level: string;
   purpose: NamespacePurpose;
+  /** The one model this namespace's text may be embedded with, or null for none. */
+  embedding_model: string | null;
   created_at: Date;
 }
+
+/** The `--embedding-model` value that means no embeddings at all. */
+export const NO_EMBEDDINGS = "none";
 export interface ActorRow {
   slug: string;
   kind: string;
@@ -236,7 +241,12 @@ export class AdminClient {
    * for one is refused rather than ignored. The database enforces the same
    * rules (0005), and allows one company city.
    */
-  async createNamespace(path: string, opts: { company?: boolean } = {}): Promise<NamespaceRow> {
+  /**
+   * Create a namespace. Its embedding model is the one given, else its
+   * parent's, else (for a city) the schema's default: Supabase's built-in
+   * gte-small, so no text leaves Supabase unless someone chooses otherwise.
+   */
+  async createNamespace(path: string, opts: { company?: boolean; embeddingModel?: string } = {}): Promise<NamespaceRow> {
     const parts = checkPath(path);
     const level = LEVELS[parts.length - 1];
     const parentPath = parts.slice(0, -1).join("/");
@@ -246,14 +256,17 @@ export class AdminClient {
     return this.tx(async (c) => {
       let parentId: string | null = null;
       let purpose: NamespacePurpose = opts.company ? "company" : "client";
+      let model: string | null | undefined =
+        opts.embeddingModel === undefined ? undefined : await this.checkModel(c, opts.embeddingModel);
       if (parentPath) {
-        const parent = await c.query<{ id: string; purpose: NamespacePurpose }>(
-          "SELECT id, purpose::text AS purpose FROM memory.namespaces WHERE path = $1",
+        const parent = await c.query<{ id: string; purpose: NamespacePurpose; embedding_model: string | null }>(
+          "SELECT id, purpose::text AS purpose, embedding_model FROM memory.namespaces WHERE path = $1",
           [parentPath],
         );
         if (!parent.rows[0]) throw new AdminError(`no namespace ${parentPath}; create it first`);
         parentId = parent.rows[0].id;
         purpose = parent.rows[0].purpose;
+        if (model === undefined) model = parent.rows[0].embedding_model;
       }
       const exists = await c.query("SELECT 1 FROM memory.namespaces WHERE path = $1", [path]);
       if (exists.rowCount) throw new AdminError(`namespace ${path} already exists`);
@@ -263,20 +276,63 @@ export class AdminClient {
         );
         if (other.rows[0]) throw new AdminError(`the company city is already ${other.rows[0].path}; there is only one`);
       }
-      const r = await c.query<NamespaceRow>(
-        `INSERT INTO memory.namespaces (parent_id, level, slug, purpose) VALUES ($1, $2, $3, $4)
-         RETURNING path, level::text AS level, purpose::text AS purpose, created_at`,
-        [parentId, level, parts[parts.length - 1], purpose],
-      );
+      const r =
+        model === undefined
+          ? await c.query<NamespaceRow>(
+              `INSERT INTO memory.namespaces (parent_id, level, slug, purpose) VALUES ($1, $2, $3, $4)
+               RETURNING path, level::text AS level, purpose::text AS purpose, embedding_model, created_at`,
+              [parentId, level, parts[parts.length - 1], purpose],
+            )
+          : await c.query<NamespaceRow>(
+              `INSERT INTO memory.namespaces (parent_id, level, slug, purpose, embedding_model) VALUES ($1, $2, $3, $4, $5)
+               RETURNING path, level::text AS level, purpose::text AS purpose, embedding_model, created_at`,
+              [parentId, level, parts[parts.length - 1], purpose, model],
+            );
       return r.rows[0];
     });
+  }
+
+  /** A known model name, or null for "none". */
+  private async checkModel(c: pg.PoolClient, model: string): Promise<string | null> {
+    if (model === NO_EMBEDDINGS) return null;
+    const r = await c.query<{ model: string }>("SELECT model FROM memory.embedding_models ORDER BY model");
+    const known = r.rows.map((row) => row.model);
+    if (!known.includes(model)) {
+      throw new AdminError(`embedding model must be one of ${[...known, NO_EMBEDDINGS].join(", ")}`);
+    }
+    return model;
+  }
+
+  /**
+   * Change the model one namespace's own new memories are embedded with. Its
+   * towers and cells keep theirs. Embeddings already stored stay, and stop
+   * being searched until they are made again with the new model.
+   */
+  async setEmbeddingModel(path: string, embeddingModel: string): Promise<NamespaceRow> {
+    checkPath(path);
+    return this.tx(async (c) => {
+      const model = await this.checkModel(c, embeddingModel);
+      const r = await c.query<NamespaceRow>(
+        `UPDATE memory.namespaces SET embedding_model = $2 WHERE path = $1
+         RETURNING path, level::text AS level, purpose::text AS purpose, embedding_model, created_at`,
+        [path, model],
+      );
+      if (!r.rows[0]) throw new AdminError(`no namespace ${path}`);
+      return r.rows[0];
+    });
+  }
+
+  async listEmbeddingModels(): Promise<Array<{ model: string; dimension: number; stays_in_supabase: boolean; description: string }>> {
+    return this.tx(async (c) =>
+      (await c.query("SELECT model, dimension, stays_in_supabase, description FROM memory.embedding_models ORDER BY model")).rows,
+    );
   }
 
   async listNamespaces(): Promise<NamespaceRow[]> {
     return this.tx(async (c) =>
       (
         await c.query<NamespaceRow>(
-          "SELECT path, level::text AS level, purpose::text AS purpose, created_at FROM memory.namespaces ORDER BY path",
+          "SELECT path, level::text AS level, purpose::text AS purpose, embedding_model, created_at FROM memory.namespaces ORDER BY path",
         )
       ).rows,
     );
@@ -684,12 +740,19 @@ export class AdminClient {
 
 export const ADMIN_USAGE = `Usage: engramport admin <command>
 
-  namespace create <path> [--company]
+  namespace create <path> [--company] [--embedding-model <model>]
                                      path is city, city/tower or city/tower/cell;
                                      --company makes a new city your company's own:
                                      its towers and cells never share a city with
-                                     a client, so neither can read the other
+                                     a client, so neither can read the other;
+                                     the embedding model defaults to the parent's,
+                                     and a city's to gte-small (stays in Supabase)
   namespace list
+  namespace embedding <path> <model>
+                                     the one model this namespace's text may be
+                                     embedded with: gte-small, text-embedding-3-small
+                                     (sent to OpenAI) or none
+  embedding models                   the models this store knows
   actor create <name> --kind agent|human|service --display "<display name>"
   actor list
   actor disable <name>               stops every key the actor holds
@@ -793,21 +856,39 @@ export async function runAdmin(argv: string[], open: () => AdminClient, io: Admi
     if (cmd === "audit" && action !== undefined) rest.unshift(action);
     switch (cmd) {
       case "namespace create": {
-        const { positional, flags } = parseFlags(rest, { company: "bool" });
+        const { positional, flags } = parseFlags(rest, { company: "bool", "embedding-model": "value" });
         const path = one(positional, "namespace path");
         const company = flags.company === true;
         if (company && checkPath(path).length !== 1) {
           throw new UsageError("--company goes on a city; its towers and cells are company namespaces already");
         }
         checkPath(path);
-        const ns = await db().createNamespace(path, { company });
-        io.out(`created ${ns.purpose} ${ns.level} ${ns.path}`);
+        const embeddingModel = typeof flags["embedding-model"] === "string" ? flags["embedding-model"] : undefined;
+        const ns = await db().createNamespace(path, { company, embeddingModel });
+        io.out(`created ${ns.purpose} ${ns.level} ${ns.path}, embeddings ${ns.embedding_model ?? NO_EMBEDDINGS}`);
         if (ns.purpose === "client" && ns.level !== "cell") io.err("Reminder: city and tower names must not name a client.");
         return 0;
       }
       case "namespace list": {
         parseFlags(rest, {});
-        for (const ns of await db().listNamespaces()) io.out(`${ns.level.padEnd(5)}  ${ns.purpose.padEnd(7)}  ${ns.path}`);
+        for (const ns of await db().listNamespaces()) {
+          io.out(`${ns.level.padEnd(5)}  ${ns.purpose.padEnd(7)}  ${(ns.embedding_model ?? NO_EMBEDDINGS).padEnd(22)}  ${ns.path}`);
+        }
+        return 0;
+      }
+      case "namespace embedding": {
+        const { positional } = parseFlags(rest, {});
+        if (positional.length !== 2) throw new UsageError("namespace embedding <path> <model>");
+        const ns = await db().setEmbeddingModel(positional[0], positional[1]);
+        io.out(`${ns.path} now embeds with ${ns.embedding_model ?? NO_EMBEDDINGS}`);
+        io.err("Memories stored before this keep their old embeddings, which are no longer searched by meaning.");
+        return 0;
+      }
+      case "embedding models": {
+        parseFlags(rest, {});
+        for (const m of await db().listEmbeddingModels()) {
+          io.out(`${m.model.padEnd(22)}  ${String(m.dimension).padEnd(4)}  ${m.stays_in_supabase ? "stays in Supabase" : "sent outside Supabase"}  ${m.description}`);
+        }
         return 0;
       }
       case "actor create": {

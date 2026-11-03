@@ -51,12 +51,20 @@ export interface KeyContext {
   scopes: string[];
   /** The key's namespace path, e.g. city/tower/cell. */
   namespace: string;
+  /** The one model this namespace's text may be embedded with, or null for none. */
+  embeddingModel: string | null;
 }
 
 export interface StoreOptions {
   /** Server pepper for key hashes, from the secrets manager. */
   pepper: Buffer;
-  /** Without one, recall is keyword only and memories are stored unembedded. */
+  /**
+   * Embedding providers by model. A namespace's text goes only to the provider
+   * for its own model; without one, its recall is keyword and graph only and
+   * its memories are stored unembedded.
+   */
+  embedders?: Embedder[];
+  /** One provider; the same as embedders: [embedder]. */
   embedder?: Embedder;
   transport: Transport;
 }
@@ -91,6 +99,13 @@ const MAX_CONTENT = 32_000;
 const CHUNK_CHARS = 2_000;
 const MAX_UPLOAD_CHUNKS = 500;
 const EMBED_BATCH = 100;
+
+interface Embedded {
+  vectors: number[][] | null;
+  /** The provider that made vectors. */
+  embedder?: Embedder;
+  warning?: string;
+}
 
 const LOCAL_DB_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
@@ -221,8 +236,14 @@ function retrievedBy(row: Row) {
 
 export class PostgresStore {
   private iterativeScan: boolean | undefined;
+  private readonly embedders = new Map<string, Embedder>();
 
-  constructor(private readonly pool: pg.Pool, private readonly opts: StoreOptions) {}
+  constructor(private readonly pool: pg.Pool, private readonly opts: StoreOptions) {
+    for (const e of [...(opts.embedders ?? []), ...(opts.embedder ? [opts.embedder] : [])]) {
+      if (this.embedders.has(e.model)) throw new Error(`two embedding providers for ${e.model}`);
+      this.embedders.set(e.model, e);
+    }
+  }
 
   async close(): Promise<void> {
     await this.pool.end();
@@ -265,9 +286,10 @@ export class PostgresStore {
                 set_config('search_path', 'pg_catalog, extensions', true)`,
         [key.api_key_id, key.namespace_id],
       );
-      const ns = await client.query<{ path: string }>("SELECT path FROM memory.namespaces WHERE id = $1", [
-        key.namespace_id,
-      ]);
+      const ns = await client.query<{ path: string; embedding_model: string | null }>(
+        "SELECT path, embedding_model FROM memory.namespaces WHERE id = $1",
+        [key.namespace_id],
+      );
       if (!ns.rows[0]) throw new StoreError("unauthorized", "invalid EngramPort key");
       const ctx: KeyContext = {
         apiKeyId: key.api_key_id,
@@ -275,6 +297,7 @@ export class PostgresStore {
         actorId: key.actor_id,
         scopes: key.scopes,
         namespace: ns.rows[0].path,
+        embeddingModel: ns.rows[0].embedding_model,
       };
       const result = await fn(client, ctx);
       await client.query("COMMIT");
@@ -299,36 +322,62 @@ export class PostgresStore {
 
   /**
    * Check the key (and write scope, and a namespace argument) before any paid
-   * call to the embedding provider, so an unknown or read-only key costs
-   * nothing. The write itself checks the key again in its own transaction.
+   * or outside call to an embedding provider, so an unknown or read-only key
+   * costs nothing, and learn which model this namespace's text may go to. The
+   * write itself checks the key again in its own transaction.
    */
-  private async preflight(rawKey: string, namespace: string | undefined, needWrite: boolean): Promise<void> {
-    await this.withKey(rawKey, async (_c, ctx) => {
+  private async preflight(rawKey: string, namespace: string | undefined, needWrite: boolean): Promise<string | null> {
+    return this.withKey(rawKey, async (_c, ctx) => {
       PostgresStore.checkNamespace(ctx, namespace);
       if (needWrite) PostgresStore.requireWrite(ctx);
+      return ctx.embeddingModel;
     });
   }
 
-  private async embedOrNull(texts: string[]): Promise<{ vectors: number[][] | null; warning?: string }> {
-    if (!this.opts.embedder) return { vectors: null, warning: "no embedding provider is configured" };
+  /**
+   * The namespace's model to embed with, checking the key first, or null when
+   * there is nothing to embed with (and so nothing to check yet).
+   */
+  private async modelFor(rawKey: string, namespace: string | undefined, needWrite: boolean): Promise<string | null> {
+    if (!this.embedders.size) return null;
+    return this.preflight(rawKey, namespace, needWrite);
+  }
+
+  /**
+   * Embed with the namespace's own model and no other. The text goes to the
+   * provider for that model only, so a namespace set to Supabase's built-in
+   * model is never sent to an outside provider the server also has.
+   */
+  private async embedOrNull(model: string | null, texts: string[]): Promise<Embedded> {
+    if (!this.embedders.size) return { vectors: null, warning: "no embedding provider is configured" };
+    if (!model) return { vectors: null, warning: "this namespace stores no embeddings" };
+    const embedder = this.embedders.get(model);
+    if (!embedder) return { vectors: null, warning: `no provider for this namespace's model (${model}) is configured` };
     try {
       const vectors: number[][] = [];
       for (let i = 0; i < texts.length; i += EMBED_BATCH) {
-        vectors.push(...(await this.opts.embedder.embed(texts.slice(i, i + EMBED_BATCH))));
+        vectors.push(...(await embedder.embed(texts.slice(i, i + EMBED_BATCH))));
       }
-      return { vectors };
+      return { vectors, embedder };
     } catch (err) {
       return { vectors: null, warning: err instanceof Error ? err.message : "embedding failed" };
     }
   }
 
-  private async insertEmbedding(c: pg.PoolClient, memoryId: string, ctx: KeyContext, v: number[]): Promise<void> {
-    const e = this.opts.embedder!;
+  /**
+   * Store an embedding made before the write's transaction. If the namespace's
+   * model changed in between, the vector is dropped rather than stored under a
+   * model the namespace no longer uses.
+   */
+  private async insertEmbedding(c: pg.PoolClient, memoryId: string, ctx: KeyContext, embedded: Embedded, i: number): Promise<boolean> {
+    const e = embedded.embedder;
+    if (!embedded.vectors || !e || ctx.embeddingModel !== e.model) return false;
     await c.query(
       `INSERT INTO memory.memory_embeddings (memory_id, namespace_id, model, dimension, embedding)
        VALUES ($1, $2, $3, $4, $5)`,
-      [memoryId, ctx.namespaceId, e.model, e.dimension, vectorLiteral(v)],
+      [memoryId, ctx.namespaceId, e.model, e.dimension, vectorLiteral(embedded.vectors[i], e.dimension)],
     );
+    return true;
   }
 
   private async rememberOne(
@@ -368,8 +417,8 @@ export class PostgresStore {
     if (input.importance !== undefined && !(input.importance >= 0 && input.importance <= 1)) {
       throw new StoreError("invalid", "importance must be between 0 and 1");
     }
-    if (this.opts.embedder) await this.preflight(rawKey, input.namespace, true);
-    const embedded = await this.embedOrNull([content]);
+    const model = await this.modelFor(rawKey, input.namespace, true);
+    const embedded = await this.embedOrNull(model, [content]);
     return this.withKey(rawKey, async (c, ctx) => {
       PostgresStore.checkNamespace(ctx, input.namespace);
       PostgresStore.requireWrite(ctx);
@@ -405,14 +454,15 @@ export class PostgresStore {
       if (previous) {
         await c.query("UPDATE memory.memories SET supersedes_id = $1 WHERE id = $2", [previous, id]);
       }
-      if (embedded.vectors) await this.insertEmbedding(c, id, ctx, embedded.vectors[0]);
+      const stored = await this.insertEmbedding(c, id, ctx, embedded, 0);
+      const warning = embedded.warning ?? (embedded.vectors && !stored ? "this namespace's model changed" : undefined);
       return {
         id,
         namespace: ctx.namespace,
         kind,
-        embedded: Boolean(embedded.vectors),
+        embedded: stored,
         ...(previous ? { supersedes: previous } : {}),
-        ...(embedded.warning ? { warning: `stored without an embedding: ${embedded.warning}` } : {}),
+        ...(warning ? { warning: `stored without an embedding: ${warning}` } : {}),
       };
     });
   }
@@ -433,12 +483,13 @@ export class PostgresStore {
     if (chunks.length > MAX_UPLOAD_CHUNKS) {
       throw new StoreError("invalid", `document is too large: more than ${MAX_UPLOAD_CHUNKS} chunks`);
     }
-    if (this.opts.embedder) await this.preflight(rawKey, input.namespace, true);
-    const embedded = await this.embedOrNull(chunks);
+    const model = await this.modelFor(rawKey, input.namespace, true);
+    const embedded = await this.embedOrNull(model, chunks);
     return this.withKey(rawKey, async (c, ctx) => {
       PostgresStore.checkNamespace(ctx, input.namespace);
       PostgresStore.requireWrite(ctx);
       const ids: string[] = [];
+      let stored = Boolean(embedded.vectors);
       for (const [i, chunk] of chunks.entries()) {
         const id = await this.rememberOne(c, ctx, {
           content: chunk,
@@ -448,16 +499,17 @@ export class PostgresStore {
           sourceKind: "file",
           sourceRef: input.filename,
         });
-        if (embedded.vectors) await this.insertEmbedding(c, id, ctx, embedded.vectors[i]);
+        stored = (await this.insertEmbedding(c, id, ctx, embedded, i)) && stored;
         ids.push(id);
       }
+      const warning = embedded.warning ?? (embedded.vectors && !stored ? "this namespace's model changed" : undefined);
       return {
         namespace: ctx.namespace,
         filename: input.filename,
         chunks: ids.length,
         ids,
-        embedded: Boolean(embedded.vectors),
-        ...(embedded.warning ? { warning: `stored without embeddings: ${embedded.warning}` } : {}),
+        embedded: stored,
+        ...(warning ? { warning: `stored without embeddings: ${warning}` } : {}),
       };
     });
   }
@@ -473,7 +525,8 @@ export class PostgresStore {
 
   /**
    * Search what the key can read: its own namespace and those above it.
-   * Vector search when an embedder is configured, otherwise full-text.
+   * Vector search with the namespace's own model when the server has its
+   * provider, otherwise full-text.
    */
   async recall(rawKey: string, input: RecallInput) {
     if (typeof input.query !== "string" || !input.query.trim()) {
@@ -490,17 +543,16 @@ export class PostgresStore {
     }
     let mode: RecallMode = input.mode ?? "hybrid";
     let queryVector: number[] | null = null;
-    if (mode === "hybrid" && this.opts.embedder) {
-      await this.preflight(rawKey, input.namespace, false);
-      const e = await this.embedOrNull([input.query]);
-      if (e.vectors) queryVector = e.vectors[0];
-      else warnings.push(`vector search unavailable (${e.warning}); blended keyword and graph only`);
-    }
-    if (mode === "vector") {
-      await this.preflight(rawKey, input.namespace, false);
-      const e = await this.embedOrNull([input.query]);
-      if (e.vectors) queryVector = e.vectors[0];
-      else {
+    let queryEmbedder: Embedder | undefined;
+    if ((mode === "hybrid" && this.embedders.size) || mode === "vector") {
+      const model = await this.modelFor(rawKey, input.namespace, false);
+      const e = await this.embedOrNull(model, [input.query]);
+      if (e.vectors) {
+        queryVector = e.vectors[0];
+        queryEmbedder = e.embedder;
+      } else if (mode === "hybrid") {
+        warnings.push(`vector search unavailable (${e.warning}); blended keyword and graph only`);
+      } else {
         warnings.push(`vector search unavailable (${e.warning}); used keyword search`);
         mode = "keyword";
       }
@@ -508,6 +560,13 @@ export class PostgresStore {
 
     return this.withKey(rawKey, async (c, ctx) => {
       PostgresStore.checkNamespace(ctx, input.namespace);
+      if (queryEmbedder && queryEmbedder.model !== ctx.embeddingModel) {
+        // The namespace's model changed after the query was embedded.
+        queryVector = null;
+        queryEmbedder = undefined;
+        warnings.push("vector search unavailable (this namespace's model changed); try again");
+        if (mode === "vector") mode = "keyword";
+      }
       let rows: Row[];
       if (mode === "hybrid" || mode === "graph") {
         const retrievers = mode === "graph" ? ["graph"] : [...(queryVector ? ["vector"] : []), "keyword", "graph"];
@@ -522,7 +581,8 @@ export class PostgresStore {
            JOIN memory.memories m ON m.id = s.memory_id
            ${MEMORY_JOINS}
            ORDER BY round(s.score::numeric, 4) DESC, s.depth, m.created_at DESC, m.id`,
-          [input.query, queryVector ? vectorLiteral(queryVector) : null, this.opts.embedder?.model ?? null, kind,
+          [input.query, queryVector ? vectorLiteral(queryVector, queryEmbedder!.dimension) : null,
+            queryEmbedder?.model ?? null, kind,
             from, to, topK, retrievers],
         );
         rows = r.rows;
@@ -542,17 +602,13 @@ export class PostgresStore {
           await c.query("SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true)");
         }
         const r = await c.query<Row>(
-          `SELECT ${MEMORY_COLUMNS}, 1 - (e.embedding <=> $1) AS score
-           FROM memory.memory_embeddings e
-           JOIN memory.memories m ON m.id = e.memory_id
+          `SELECT ${MEMORY_COLUMNS}, v.score
+           FROM memory.vector_search(p_embedding => $1, p_model => $2, p_kind => $3::memory.memory_kind,
+                                     p_from => $4, p_to => $5, p_limit => $6) v
+           JOIN memory.memories m ON m.id = v.memory_id
            ${MEMORY_JOINS}
-           WHERE e.model = $2 AND m.status = 'active'
-             AND ($3::memory.memory_kind IS NULL OR m.kind = $3)
-             AND ($4::timestamptz IS NULL OR m.created_at >= $4)
-             AND ($5::timestamptz IS NULL OR m.created_at <= $5)
-           ORDER BY e.embedding <=> $1
-           LIMIT $6`,
-          [vectorLiteral(queryVector), this.opts.embedder!.model, kind, from, to, topK],
+           ORDER BY v.score DESC, m.id`,
+          [vectorLiteral(queryVector, queryEmbedder!.dimension), queryEmbedder!.model, kind, from, to, topK],
         );
         rows = r.rows;
         if (input.minScore !== undefined) rows = rows.filter((row) => Number(row.score) >= Number(input.minScore));

@@ -12,6 +12,11 @@
 \set k_c2 '00000000-0000-7000-8000-0000000000f2'
 \set k_c3 '00000000-0000-7000-8000-0000000000f3'
 
+-- A stand-in 1536-dimension model for cell 3 (0011), so no real model is needed.
+INSERT INTO memory.embedding_models (model, dimension, stays_in_supabase, description)
+  VALUES ('test-model', 1536, true, 'test only');
+UPDATE memory.namespaces SET embedding_model = 'test-model' WHERE id = :'c3';
+
 SET ROLE engramport_app;
 BEGIN; SELECT t.as_key(:'k_city', :'city');
   SELECT memory.remember('principle', 'zephyr pump city principle', 'remember', 'rest') IS NOT NULL;

@@ -130,7 +130,8 @@ Set `ENGRAMPORT_STORE=postgres` and the server reads and writes the memory schem
 | `ENGRAMPORT_DATABASE_URL` | postgres | Connection URL for the `engramport_app` role. Admin roles are refused, since they skip row security. Leave `sslmode` out: TLS to a remote host is always verified. |
 | `ENGRAMPORT_DATABASE_CA_FILE` | for Supabase | The database's CA certificate file, so TLS can be verified. |
 | `ENGRAMPORT_KEY_PEPPER` | postgres | At least 32 random bytes, base64 or hex, used to hash keys. |
-| `OPENAI_API_KEY` | no | Turns on embeddings, so recall can search by meaning. Without it, hybrid recall uses its keyword and graph retrievers only. |
+| `ENGRAMPORT_EMBED_URL`, `ENGRAMPORT_EMBED_SECRET` | no | The embed Edge Function in your Supabase project and its shared secret (32 characters or more). Turns on Supabase's built-in `gte-small` embeddings, the default model for every namespace, so recall can search by meaning and no memory text leaves Supabase. See [docs/embeddings.md](docs/embeddings.md). |
+| `OPENAI_API_KEY` | no | Turns on OpenAI embeddings for namespaces set to `text-embedding-3-small` only. Their text is sent to OpenAI; no other namespace's is. Without a provider for a namespace's model, its recall uses the keyword and graph retrievers only. |
 
 Keep all of these in a secrets manager, never in a file in the repo. On this store `delete_memory` retracts: the memory stops coming back from recall but its text is kept for the record. Reusing a `dedup_key` makes a new version that supersedes the active one, and the old text is kept. `chat`, `groom`, `dream` and `export_graph` are not available on it yet, so the server doesn't list them, and the tools it does list describe how they behave on this store. It also adds three knowledge-graph tools: `link` (assert entities, aliases, relations, which entities a memory mentions, and links between memories), `unlink` (retract one of them) and `get_entity` (an entity with its aliases, relations and the memories that mention it). They follow the same namespace rules as memories.
 
@@ -163,6 +164,7 @@ engramport admin namespace create acme/ops/pilot      # a cell
 engramport admin namespace create mycompany --company # your own company's city, once
 engramport admin namespace create mycompany/knowledge
 engramport admin namespace create mycompany/knowledge/hq
+engramport admin namespace embedding acme/ops/pilot gte-small   # the one model its text may go to
 engramport admin actor create claude --kind agent --display "Claude"
 engramport admin key mint --namespace acme/ops/pilot --actor claude --expires-in 90d
 engramport admin key list --namespace acme/ops/pilot

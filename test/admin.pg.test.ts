@@ -91,6 +91,23 @@ describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABA
     assert.ok((await admin.listNamespaces()).some((n) => n.path === cell));
   });
 
+  test("a namespace's embedding model defaults to Supabase's, passes down, and can be changed", async () => {
+    const top = `em-${run}`;
+    assert.equal((await admin.createNamespace(top)).embedding_model, "gte-small");
+    assert.equal((await admin.createNamespace(`${top}/oa`, { embeddingModel: "text-embedding-3-small" })).embedding_model,
+      "text-embedding-3-small");
+    assert.equal((await admin.createNamespace(`${top}/oa/inherits`)).embedding_model, "text-embedding-3-small");
+    assert.equal((await admin.createNamespace(`${top}/oa/pilot`, { embeddingModel: "gte-small" })).embedding_model, "gte-small");
+    assert.equal((await admin.createNamespace(`${top}/oa/off`, { embeddingModel: "none" })).embedding_model, null);
+    await refused(admin.createNamespace(`${top}/oa/bad`, { embeddingModel: "made-up" }), /must be one of/);
+    assert.equal((await admin.setEmbeddingModel(`${top}/oa/inherits`, "gte-small")).embedding_model, "gte-small");
+    assert.equal((await admin.setEmbeddingModel(`${top}/oa/inherits`, "none")).embedding_model, null);
+    await refused(admin.setEmbeddingModel(`${top}/missing`, "gte-small"), /no namespace/);
+    const models = (await admin.listEmbeddingModels()).map((m) => [m.model, m.dimension, m.stays_in_supabase]);
+    assert.deepEqual(models.filter(([m]) => m === "gte-small" || m === "text-embedding-3-small"),
+      [["gte-small", 384, true], ["text-embedding-3-small", 1536, false]]);
+  });
+
   test("actors are created once and must be enabled to get a key", async () => {
     await admin.createActor(`claude-${run}`, "agent", "Claude");
     await admin.createActor(`grok-${run}`, "agent", "Grok Bot");
@@ -218,6 +235,27 @@ describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABA
     assert.equal(await runAdmin(["namespace", "list"], open, io), 0);
     assert.ok(out.some((l) => /^cell\s+company\s/.test(l) && l.endsWith(`/t-${run}/hq`)), out.join("\n"));
     assert.ok(out.some((l) => l.includes("client") && l.endsWith(cell)));
+  });
+
+  test("the command line sets and shows each namespace's embedding model", async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const io = { out: (l: string) => out.push(l), err: (l: string) => err.push(l) };
+    const open = () => new AdminClient(new pg.Pool({ connectionString: urlAs(opsRole, "ops-test-only") }), pepper);
+    const top = `emcli-${run}`;
+    assert.equal(await runAdmin(["namespace", "create", top], open, io), 0, err.join("\n"));
+    assert.equal(await runAdmin(["namespace", "create", `${top}/t`, "--embedding-model", "none"], open, io), 0, err.join("\n"));
+    assert.ok(out.some((l) => l.endsWith(`${top}, embeddings gte-small`)), out.join("\n"));
+    assert.ok(out.some((l) => l.endsWith(`${top}/t, embeddings none`)), out.join("\n"));
+    assert.equal(await runAdmin(["namespace", "embedding", `${top}/t`, "gte-small"], open, io), 0, err.join("\n"));
+    assert.ok(out.some((l) => l === `${top}/t now embeds with gte-small`), out.join("\n"));
+    out.length = 0;
+    assert.equal(await runAdmin(["namespace", "list"], open, io), 0);
+    assert.ok(out.some((l) => /\sgte-small\s/.test(l) && l.endsWith(`${top}/t`)), out.join("\n"));
+    out.length = 0;
+    assert.equal(await runAdmin(["embedding", "models"], open, io), 0);
+    assert.ok(out.some((l) => l.startsWith("gte-small") && l.includes("stays in Supabase")), out.join("\n"));
+    assert.ok(out.some((l) => l.startsWith("text-embedding-3-small") && l.includes("sent outside Supabase")), out.join("\n"));
   });
 
   test("the audit shows who wrote what, where and when, and never the content", async () => {

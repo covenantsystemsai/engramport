@@ -53,7 +53,12 @@ export async function runDoctor(
     out(`  store:     postgres`);
     out(`  database:  ${databasePreview(cfg.databaseUrl)}`);
     out(`  pepper:    ${cfg.keyPepper ? "set" : "(not set)"}`);
-    out(`  embedding: ${cfg.openaiApiKey ? "openai text-embedding-3-small" : "(off: keyword search only)"}`);
+    const providers = [
+      ...(cfg.embedUrl ? ["gte-small (Supabase built-in)"] : []),
+      ...(cfg.openaiApiKey ? ["text-embedding-3-small (OpenAI)"] : []),
+    ];
+    out(`  embedding: ${providers.length ? providers.join(", ") : "(none: keyword and graph search only)"}`);
+    out(`             each namespace's text goes only to its own model's provider`);
     out(`  api key:   ${cfg.mode === "http" ? "(each caller sends its own)" : keyPreview(cfg.apiKey)}`);
     const problems = configProblems(cfg);
     if (cfg.mode === "stdio" && !cfg.apiKey) problems.push("ENGRAMPORT_API_KEY is not set.");

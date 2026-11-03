@@ -39,11 +39,11 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "node --import tsx --test test/config.smoke.test.ts test/mcp-http.test.ts test/caller.test.ts test/request-id.test.ts test/doctor.test.ts test/keys.test.ts test/admin.test.ts test/extract.test.ts test/oauth.test.ts test/store-definitions.test.ts",
+    "test": "node --import tsx --test test/config.smoke.test.ts test/mcp-http.test.ts test/caller.test.ts test/request-id.test.ts test/embeddings.test.ts test/doctor.test.ts test/keys.test.ts test/admin.test.ts test/extract.test.ts test/oauth.test.ts test/store-definitions.test.ts",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "prepublishOnly": "npm run build",
-    "test:store": "node --import tsx --test --test-concurrency=1 test/store.pg.test.ts test/admin.pg.test.ts test/graph.pg.test.ts test/extract.pg.test.ts test/eval.pg.test.ts test/oauth.pg.test.ts test/oauth-http.pg.test.ts"
+    "test:store": "node --import tsx --test --test-concurrency=1 test/store.pg.test.ts test/embedding-models.pg.test.ts test/admin.pg.test.ts test/graph.pg.test.ts test/extract.pg.test.ts test/eval.pg.test.ts test/oauth.pg.test.ts test/oauth-http.pg.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

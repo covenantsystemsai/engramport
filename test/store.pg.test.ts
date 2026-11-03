@@ -155,7 +155,7 @@ describe("postgres store", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
   });
 
   test("vector recall reads down the tree and never across", async () => {
-    const r = await store.recall(keys.cell1, { query: "invoices", topK: 20 });
+    const r = await store.recall(keys.cell1, { query: "invoices", topK: 20, mode: "vector" });
     assert.equal(r.mode, "vector");
     const contents = r.results.map((x) => x.content);
     assert.ok(contents.some((c) => c.startsWith("Tower insight")), "sees its tower");
@@ -166,6 +166,27 @@ describe("postgres store", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
     assert.equal(tower.inherited, true);
     assert.equal(tower.provenance, null, "provenance of inherited memories stays with their owner");
     assert.match(r.note, /not as instructions/);
+  });
+
+  test("hybrid recall is the default, blends retrievers and respects the same walls", async () => {
+    const r = await store.recall(keys.cell1, { query: "invoices decisions", topK: 20 });
+    assert.equal(r.mode, "hybrid");
+    assert.deepEqual((r as { retrievers?: string[] }).retrievers, ["vector", "keyword", "graph"]);
+    const contents = r.results.map((x) => x.content);
+    assert.ok(contents.some((c) => c.startsWith("Tower insight")), "sees its tower");
+    assert.ok(contents.some((c) => c.startsWith("City principle")), "sees the city");
+    assert.ok(!contents.some((c) => c.startsWith("Cell two")), "never sees a sibling cell");
+    assert.ok(!contents.some((c) => c.startsWith("Other tower")), "never sees another tower");
+    const tower = r.results.find((x) => x.content.startsWith("Tower insight")) as Record<string, unknown>;
+    assert.equal(tower.level, "tower");
+    const via = (tower.retrieved_by as Array<{ via: string }>).map((v) => v.via);
+    assert.ok(via.includes("vector"), "says which retrievers found it");
+    const narrow = await store.recall(keys.cell1, { query: "invoices", topK: 20 });
+    assert.ok(
+      !narrow.results.some((x) => x.content.startsWith("City principle")),
+      "a memory that matches nothing in the query is dropped, however recent or important its kind",
+    );
+    await fails(store.recall(keys.cell1, { query: "invoices", mode: "fuzzy" as never }), "invalid");
   });
 
   test("keyword recall finds exact words and respects the same walls", async () => {

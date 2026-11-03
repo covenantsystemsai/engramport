@@ -1,0 +1,290 @@
+{
+  "about": "A made-up namespace for the retrieval eval. No real people, clients or places.",
+  "memories": [
+    {
+      "key": "pr",
+      "level": "cell",
+      "kind": "decision",
+      "content": "PR 42 moved key hashing to HMAC with a server pepper."
+    },
+    {
+      "key": "pump",
+      "level": "cell",
+      "kind": "fact",
+      "content": "The north yard pump was replaced in March."
+    },
+    {
+      "key": "contact",
+      "level": "cell",
+      "kind": "fact",
+      "content": "Riverbend Supply's contact line is the main office."
+    },
+    {
+      "key": "deploy",
+      "level": "tower",
+      "kind": "principle",
+      "content": "Deploys go out on Tuesdays after the checks pass."
+    },
+    {
+      "key": "onboard",
+      "level": "tower",
+      "kind": "insight",
+      "content": "New agents get a read-only key for their first week."
+    },
+    {
+      "key": "billing",
+      "level": "city",
+      "kind": "principle",
+      "content": "Billing runs on the first business day of each month."
+    },
+    {
+      "key": "d1",
+      "level": "cell",
+      "kind": "note",
+      "content": "The coffee machine is on the second floor."
+    },
+    {
+      "key": "d2",
+      "level": "cell",
+      "kind": "note",
+      "content": "Team lunch moved to Thursdays."
+    },
+    {
+      "key": "d3",
+      "level": "cell",
+      "kind": "fact",
+      "content": "The printer needs new toner every quarter."
+    },
+    {
+      "key": "d4",
+      "level": "tower",
+      "kind": "fact",
+      "content": "Parking passes renew in January."
+    },
+    {
+      "key": "d5",
+      "level": "tower",
+      "kind": "note",
+      "content": "Slides for the review live in the shared folder."
+    },
+    {
+      "key": "d6",
+      "level": "city",
+      "kind": "fact",
+      "content": "Office hours are nine to five on weekdays."
+    },
+    {
+      "key": "d7",
+      "level": "cell",
+      "kind": "note",
+      "content": "Remember to water the plants on Fridays."
+    },
+    {
+      "key": "d8",
+      "level": "cell",
+      "kind": "fact",
+      "content": "The guest wifi password rotates monthly."
+    },
+    {
+      "key": "x0",
+      "level": "cell",
+      "kind": "fact",
+      "content": "PR 17 added indexes to the store."
+    },
+    {
+      "key": "x1",
+      "level": "tower",
+      "kind": "note",
+      "content": "The garden hose is in the shed."
+    },
+    {
+      "key": "x2",
+      "level": "city",
+      "kind": "fact",
+      "content": "Lights in the hallway are on a timer."
+    },
+    {
+      "key": "x3",
+      "level": "cell",
+      "kind": "note",
+      "content": "The kitchen sink drains slowly."
+    },
+    {
+      "key": "x4",
+      "level": "tower",
+      "kind": "fact",
+      "content": "Window blinds were cleaned in spring."
+    },
+    {
+      "key": "x5",
+      "level": "city",
+      "kind": "note",
+      "content": "The fire drill is scheduled twice a year."
+    },
+    {
+      "key": "x6",
+      "level": "cell",
+      "kind": "fact",
+      "content": "The front desk keeps spare umbrellas."
+    },
+    {
+      "key": "x7",
+      "level": "tower",
+      "kind": "note",
+      "content": "Recycling goes out on Mondays."
+    },
+    {
+      "key": "x8",
+      "level": "city",
+      "kind": "fact",
+      "content": "The conference room seats twelve."
+    },
+    {
+      "key": "x9",
+      "level": "cell",
+      "kind": "note",
+      "content": "Visitors sign in at reception."
+    },
+    {
+      "key": "x10",
+      "level": "tower",
+      "kind": "fact",
+      "content": "The elevator inspection passed."
+    },
+    {
+      "key": "x11",
+      "level": "city",
+      "kind": "note",
+      "content": "Desk chairs were ordered for the annex."
+    },
+    {
+      "key": "x12",
+      "level": "cell",
+      "kind": "fact",
+      "content": "The fridge is cleared out on Fridays."
+    },
+    {
+      "key": "x13",
+      "level": "tower",
+      "kind": "note",
+      "content": "Snow removal is handled by the landlord."
+    },
+    {
+      "key": "x14",
+      "level": "city",
+      "kind": "fact",
+      "content": "The break room has a microwave."
+    },
+    {
+      "key": "x15",
+      "level": "cell",
+      "kind": "note",
+      "content": "Badges are printed at security."
+    },
+    {
+      "key": "x16",
+      "level": "tower",
+      "kind": "fact",
+      "content": "The roof was resealed two summers ago."
+    },
+    {
+      "key": "x17",
+      "level": "city",
+      "kind": "note",
+      "content": "The lobby plants are watered weekly."
+    },
+    {
+      "key": "x18",
+      "level": "cell",
+      "kind": "fact",
+      "content": "A whiteboard was added upstairs."
+    },
+    {
+      "key": "sibling",
+      "level": "sibling",
+      "kind": "decision",
+      "content": "PR 42 in the other cell changed logging for deploys."
+    }
+  ],
+  "graph": {
+    "entities": [
+      {
+        "name": "North Yard Pump",
+        "type": "equipment",
+        "mentionedIn": [
+          "pump"
+        ]
+      },
+      {
+        "name": "Riverbend Supply",
+        "type": "company",
+        "mentionedIn": [
+          "contact"
+        ]
+      }
+    ],
+    "relations": [
+      {
+        "source": "Riverbend Supply",
+        "predicate": "services",
+        "target": "North Yard Pump",
+        "confidence": 0.9
+      }
+    ]
+  },
+  "synonyms": [
+    [
+      "invoice",
+      "invoices",
+      "billing",
+      "bill",
+      "bills"
+    ],
+    [
+      "deploy",
+      "deploys",
+      "release",
+      "releases",
+      "ship"
+    ]
+  ],
+  "questions": [
+    {
+      "question": "What did PR 42 change?",
+      "expect": [
+        "pr"
+      ]
+    },
+    {
+      "question": "When do releases ship?",
+      "expect": [
+        "deploy"
+      ]
+    },
+    {
+      "question": "Who services the north yard pump?",
+      "expect": [
+        "pump",
+        "contact"
+      ]
+    },
+    {
+      "question": "When are invoices sent?",
+      "expect": [
+        "billing"
+      ]
+    },
+    {
+      "question": "What access does a new agent start with?",
+      "expect": [
+        "onboard"
+      ]
+    },
+    {
+      "question": "How do I reach Riverbend?",
+      "expect": [
+        "contact"
+      ]
+    }
+  ]
+}

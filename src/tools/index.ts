@@ -117,9 +117,9 @@ export const toolDefinitions = [
         },
         mode: {
           type: "string",
-          enum: ["vector", "keyword"],
+          enum: ["hybrid", "vector", "keyword", "graph"],
           description:
-            "Postgres store only: vector (by meaning, the default when embeddings are on) or keyword (exact words, names, numbers)",
+            "Postgres store only: hybrid (the default) blends meaning, exact words and the knowledge graph; vector (by meaning), keyword (exact words, names, numbers) or graph (memories about the entities the query names) run one alone",
         },
       },
       required: ["query"],

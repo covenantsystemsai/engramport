@@ -13,7 +13,7 @@ import { backendKey } from "../caller.js";
 import { openAIEmbedder } from "../embeddings.js";
 import { decodePepper } from "../keys.js";
 import type { LinkInput } from "../store/graph.js";
-import { createPool, MEMORY_KINDS, MemoryKind, PostgresStore, StoreError } from "../store/postgres.js";
+import { createPool, MEMORY_KINDS, MemoryKind, PostgresStore, RECALL_MODES, RecallMode, StoreError } from "../store/postgres.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 
@@ -87,14 +87,14 @@ export async function executeStoreTool(
       }
       case "recall": {
         const mode = str(args.mode);
-        if (mode !== undefined && mode !== "vector" && mode !== "keyword") {
-          throw new StoreError("invalid", "mode must be vector or keyword");
+        if (mode !== undefined && !RECALL_MODES.includes(mode as RecallMode)) {
+          throw new StoreError("invalid", `mode must be one of ${RECALL_MODES.join(", ")}`);
         }
         if (str(args.source_filter)) throw new StoreError("invalid", "source_filter is not supported by this store yet");
         return ok(await store.recall(key, {
           query: args.query as string,
           topK: num(args.top_k),
-          mode: mode as "vector" | "keyword" | undefined,
+          mode: mode as RecallMode | undefined,
           kind: toKind(args.node_type_filter),
           minScore: num(args.min_score),
           dateFrom: str(args.date_from),

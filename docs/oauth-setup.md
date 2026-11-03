@@ -6,7 +6,7 @@ Nothing here goes in the repository. The Google client secret lives in Supabase 
 
 ## What you need first
 
-- A Supabase project with EngramPort's migrations applied through `0009_oauth`. Check with `select version, name from supabase_migrations.schema_migrations order by version;` in the SQL editor.
+- A Supabase project with EngramPort's migrations applied through `0009_oauth`. `select to_regclass('memory.oauth_members');` in the SQL editor returns the table's name once 0009 is in, and null before. `db/migrate.sh` records each file it applied in `engramport_meta.schema_migrations`.
 - The public https origin the server will run on, like `https://mcp.example.com`. Below it is called the public URL.
 - Your project's ref, the part before `.supabase.co` in its URL.
 

@@ -26,7 +26,7 @@ import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import { createMcpServer, defaultDeps, McpDeps, VERSION } from "./server.js";
-import { keyFromHeaders, runAsCaller } from "./caller.js";
+import { keyFromHeaders, requestIdFromHeaders, runAsCaller } from "./caller.js";
 
 export interface HttpAppOptions {
   apiUrl: string;
@@ -40,6 +40,8 @@ export interface HttpAppOptions {
   authenticate?: (key: string) => Promise<boolean>;
   /** Requests per minute per key (or per address without one) on one instance. Default 600. */
   requestsPerMinute?: number;
+  /** One JSON log line per request (no key, body or memory text). Default on. */
+  logRequests?: boolean;
 }
 
 export function createHttpApp(opts: HttpAppOptions): express.Express {
@@ -49,7 +51,30 @@ export function createHttpApp(opts: HttpAppOptions): express.Express {
   const app = express();
   // One proxy hop (Cloud Run's front end) sets the client address used by rate limits.
   app.set("trust proxy", 1);
-  app.use(cors({ exposedHeaders: ["Mcp-Session-Id", "WWW-Authenticate"] }));
+  app.use(cors({ exposedHeaders: ["Mcp-Session-Id", "WWW-Authenticate", "X-Request-Id"] }));
+
+  // Every request gets an id, returned as X-Request-Id and stored with any
+  // write it makes. One log line per request carries the id, method, route,
+  // status and time taken: never the key, the body, the query string or any
+  // memory text.
+  app.use((req: Request, res: Response, next) => {
+    const requestId = requestIdFromHeaders(req.headers);
+    const started = process.hrtime.bigint();
+    res.locals.requestId = requestId;
+    res.set("X-Request-Id", requestId);
+    res.on("finish", () => {
+      if (opts.logRequests === false) return;
+      console.log(JSON.stringify({
+        event: "request",
+        request_id: requestId,
+        method: req.method,
+        path: req.path.slice(0, 200),
+        status: res.statusCode,
+        ms: Number((process.hrtime.bigint() - started) / 1_000_000n),
+      }));
+    });
+    next();
+  });
   app.use(express.json({ limit: "10mb" }));
 
   // Health stays open for uptime checks, so it says nothing about the backend
@@ -100,12 +125,12 @@ export function createHttpApp(opts: HttpAppOptions): express.Express {
       return;
     }
     if (!opts.authenticate) {
-      runAsCaller({ apiKey }, next);
+      runAsCaller({ apiKey, requestId: res.locals.requestId }, next);
       return;
     }
     opts.authenticate(apiKey).then(
       (ok) => {
-        if (ok) runAsCaller({ apiKey }, next);
+        if (ok) runAsCaller({ apiKey, requestId: res.locals.requestId }, next);
         else unauthorized(res, "Unauthorized: this key is unknown, revoked or expired", "invalid_token");
       },
       (err) => {

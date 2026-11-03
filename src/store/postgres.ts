@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import pg from "pg";
 
+import { currentRequestId } from "../caller.js";
 import { chunkText } from "../chunk.js";
 import { Embedder, vectorLiteral } from "../embeddings.js";
 import { hashKey, parseKey } from "../keys.js";
@@ -160,6 +161,7 @@ interface Row {
   transport: string | null;
   source_kind: string | null;
   source_ref: string | null;
+  request_id: string | null;
   recorded_at: Date | null;
   provenance_id: string | null;
 }
@@ -170,7 +172,7 @@ const MEMORY_COLUMNS = `
   m.id, m.kind, m.content, m.status, m.created_at, m.metadata, m.supersedes_id, m.namespace_id,
   n.path AS namespace,
   p.id AS provenance_id, a.slug AS written_by, p.tool, p.transport::text AS transport,
-  p.source_kind, p.source_ref, p.created_at AS recorded_at`;
+  p.source_kind, p.source_ref, p.request_id, p.created_at AS recorded_at`;
 const MEMORY_JOINS = `
   JOIN memory.namespaces n ON n.id = m.namespace_id
   LEFT JOIN memory.provenance p ON p.id = m.provenance_id
@@ -198,6 +200,7 @@ function present(row: Row, ctx: KeyContext) {
           transport: row.transport,
           source_kind: row.source_kind,
           source_ref: row.source_ref,
+          request_id: row.request_id,
           recorded_at: row.recorded_at?.toISOString() ?? null,
         }
       : null,
@@ -337,7 +340,7 @@ export class PostgresStore {
       `SELECT memory.remember(
          p_kind => $1::memory.memory_kind, p_content => $2, p_tool => $3,
          p_transport => $4::memory.transport, p_importance => $5::real, p_metadata => $6::jsonb,
-         p_dedup_key => $7, p_source_kind => $8, p_source_ref => $9) AS id`,
+         p_dedup_key => $7, p_source_kind => $8, p_source_ref => $9, p_request_id => $10) AS id`,
       [
         input.kind ?? "fact",
         input.content,
@@ -348,6 +351,7 @@ export class PostgresStore {
         input.dedupKey ?? null,
         input.sourceKind ?? null,
         input.sourceRef ?? null,
+        currentRequestId() ?? null,
       ],
     );
     return r.rows[0].id;

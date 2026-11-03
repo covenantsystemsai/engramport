@@ -16,6 +16,7 @@ import type pg from "pg";
 
 import type { KeyContext, Transport } from "./postgres.js";
 import { StoreError } from "./postgres.js";
+import { currentRequestId } from "../caller.js";
 
 export const MEMORY_LINK_KINDS = ["supports", "contradicts", "derived_from", "synthesizes", "related"] as const;
 export type MemoryLinkKind = (typeof MEMORY_LINK_KINDS)[number];
@@ -306,8 +307,8 @@ export async function linkTx(
     opts.provenanceId ??
     (
       await c.query<{ id: string }>(
-        "SELECT memory.record_provenance(p_tool => 'link', p_transport => $1::memory.transport) AS id",
-        [transport],
+        "SELECT memory.record_provenance(p_tool => 'link', p_transport => $1::memory.transport, p_request_id => $2) AS id",
+        [transport, currentRequestId() ?? null],
       )
     ).rows[0].id;
 

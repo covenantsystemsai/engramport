@@ -39,7 +39,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "node --import tsx --test test/config.smoke.test.ts test/mcp-http.test.ts test/caller.test.ts test/doctor.test.ts test/keys.test.ts test/admin.test.ts test/extract.test.ts test/oauth.test.ts test/store-definitions.test.ts",
+    "test": "node --import tsx --test test/config.smoke.test.ts test/mcp-http.test.ts test/caller.test.ts test/request-id.test.ts test/doctor.test.ts test/keys.test.ts test/admin.test.ts test/extract.test.ts test/oauth.test.ts test/store-definitions.test.ts",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "prepublishOnly": "npm run build",

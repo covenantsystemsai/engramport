@@ -182,3 +182,20 @@ test("with a key check: an unknown key gets 401 invalid_token, a store outage 50
     await new Promise<void>((r) => s.close(() => r()));
   }
 });
+
+test("requests are rate limited per key, so one caller can't crowd out another", async () => {
+  const app = createHttpApp({ apiUrl: "http://stub", namespace: "test", deps, requestsPerMinute: 2 });
+  const s: HttpServer = await new Promise((resolve) => {
+    const x = app.listen(0, "127.0.0.1", () => resolve(x));
+  });
+  try {
+    const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/remember`;
+    const post = (key: string) => fetch(url, {
+      method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: "{}",
+    }).then((r) => r.status);
+    assert.deepEqual([await post("ek_a"), await post("ek_a"), await post("ek_a")], [200, 200, 429]);
+    assert.equal(await post("ek_b"), 200);
+  } finally {
+    await new Promise<void>((r) => s.close(() => r()));
+  }
+});

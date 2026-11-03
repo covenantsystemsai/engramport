@@ -110,7 +110,8 @@ describe("oauth over http", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABAS
       authenticate: (k) => store.checkKey(k),
       resourceMetadataUrl: resourceMetadataUrl(ISSUER),
       oauth: createOAuthRouter({
-        publicUrl: ISSUER, redirectHosts: ["claude.ai", "claude.com"], pepper, db: appPool, identity, registerLimit: 50,
+        publicUrl: ISSUER, redirectHosts: ["claude.ai", "claude.com"], pepper, db: appPool, identity,
+        limits: { browserPerMinute: 1000, tokenPerMinute: 1000, registerPerHour: 1000 },
       }),
     });
     server = await new Promise((resolve) => {

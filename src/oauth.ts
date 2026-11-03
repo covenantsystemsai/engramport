@@ -29,6 +29,7 @@
 
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
 import express, { Request, Response, Router } from "express";
+import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 
 import { hashKey, mintKey, parseKey, randomBase62 } from "./keys.js";
 
@@ -65,8 +66,8 @@ export interface OAuthOptions {
   pepper: Buffer;
   db: OAuthDb;
   identity: IdentityProvider;
-  /** Registrations allowed per address per hour on one instance. */
-  registerLimit?: number;
+  /** Requests allowed per window on one instance. Defaults suit production. */
+  limits?: { browserPerMinute?: number; tokenPerMinute?: number; registerPerHour?: number };
 }
 
 const STATE_COOKIE = "__Host-ep_oauth";
@@ -254,8 +255,25 @@ export function createOAuthRouter(opts: OAuthOptions): Router {
   const hosts = opts.redirectHosts.map((h) => h.toLowerCase());
   const { db, pepper, identity } = opts;
   const hash = (token: string) => hashKey(token, pepper);
-  const limit = opts.registerLimit ?? 20;
-  const registrations = new Map<string, number[]>();
+  const ip = (req: Request) => ipKeyGenerator(req.ip ?? "unknown");
+  const limiter = (windowMs: number, limit: number, key: (req: Request) => string) =>
+    rateLimit({
+      windowMs,
+      limit,
+      keyGenerator: key,
+      standardHeaders: "draft-7",
+      legacyHeaders: false,
+      handler: (_req, res) => {
+        res.status(429).set("Cache-Control", "no-store").json({ error: "too_many_requests", error_description: "slow down" });
+      },
+    });
+  // Per instance, in memory. The browser steps are per address; token and
+  // revoke are per address and client, since claude.ai calls them for many
+  // people from a few addresses.
+  const browserLimit = limiter(60_000, opts.limits?.browserPerMinute ?? 30, ip);
+  const tokenLimit = limiter(60_000, opts.limits?.tokenPerMinute ?? 120,
+    (req) => `${ip(req)}|${typeof req.body?.client_id === "string" ? req.body.client_id.slice(0, 40) : ""}`);
+  const registerLimit = limiter(3_600_000, opts.limits?.registerPerHour ?? 20, ip);
 
   const router = express.Router();
   const form = express.urlencoded({ extended: false, limit: "16kb" });
@@ -291,18 +309,9 @@ export function createOAuthRouter(opts: OAuthOptions): Router {
   });
 
   // ── Registration ──
-  router.post("/oauth/register", express.json({ limit: "16kb" }), safe(async (req, res) => {
+  router.post("/oauth/register", registerLimit, express.json({ limit: "16kb" }), safe(async (req, res) => {
     const fail = (error: string, description: string) =>
       res.status(400).set("Cache-Control", "no-store").json({ error, error_description: description });
-
-    const who = req.ip ?? "unknown";
-    const now = Date.now();
-    const recent = (registrations.get(who) ?? []).filter((t) => now - t < 3_600_000);
-    if (recent.length >= limit) {
-      res.status(429).set("Retry-After", "3600").json({ error: "too_many_requests" });
-      return;
-    }
-    if (registrations.size > 10_000) registrations.clear();
 
     const body = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>;
     const uris = body.redirect_uris;
@@ -328,8 +337,6 @@ export function createOAuthRouter(opts: OAuthOptions): Router {
       return fail("invalid_client_metadata", "response_types may hold code only");
     }
 
-    recent.push(now);
-    registrations.set(who, recent);
     const clientId = `epc_${randomBase62(24)}`;
     try {
       const r = await db.query<{ created_at: Date }>(
@@ -352,7 +359,7 @@ export function createOAuthRouter(opts: OAuthOptions): Router {
   }));
 
   // ── Authorization ──
-  router.get("/oauth/authorize", safe(async (req, res) => {
+  router.get("/oauth/authorize", browserLimit, safe(async (req, res) => {
     const q = req.query;
     const clientId = one(q.client_id);
     const redirectUri = one(q.redirect_uri);
@@ -398,7 +405,7 @@ export function createOAuthRouter(opts: OAuthOptions): Router {
     res.set("Cache-Control", "no-store").redirect(302, identity.signInUrl(s256(idpVerifier), `${issuer}/oauth/callback`));
   }));
 
-  router.get("/oauth/callback", safe(async (req, res) => {
+  router.get("/oauth/callback", browserLimit, safe(async (req, res) => {
     const flow = openState(pepper, readCookie(req, STATE_COOKIE));
     if (!flow || flow.step !== "login") {
       return page(res, 400, "Sign-in expired", "<p>This sign-in has expired or was opened in another browser. Start again from the app.</p>");
@@ -463,7 +470,7 @@ export function createOAuthRouter(opts: OAuthOptions): Router {
       target);
   }));
 
-  router.post("/oauth/decision", form, safe(async (req, res) => {
+  router.post("/oauth/decision", browserLimit, form, safe(async (req, res) => {
     const flow = openState(pepper, readCookie(req, STATE_COOKIE));
     const csrf = one(req.body?.csrf) ?? "";
     if (!flow || flow.step !== "choose" || csrf.length !== flow.csrf.length ||
@@ -503,7 +510,7 @@ export function createOAuthRouter(opts: OAuthOptions): Router {
   const tokenError = (res: Response, status: number, error: string, description: string) =>
     res.status(status).set({ "Cache-Control": "no-store", Pragma: "no-cache" }).json({ error, error_description: description });
 
-  router.post("/oauth/token", form, safe(async (req, res) => {
+  router.post("/oauth/token", form, tokenLimit, safe(async (req, res) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     const clientId = one(b.client_id);
     if (!clientId || b.client_secret !== undefined || req.headers.authorization) {
@@ -546,7 +553,7 @@ export function createOAuthRouter(opts: OAuthOptions): Router {
     });
   }));
 
-  router.post("/oauth/revoke", form, safe(async (req, res) => {
+  router.post("/oauth/revoke", form, tokenLimit, safe(async (req, res) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     const clientId = one(b.client_id);
     const token = one(b.token);

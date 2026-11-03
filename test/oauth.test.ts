@@ -94,3 +94,30 @@ test("supabaseIdentity: PKCE sign-in URL, code trade and sign-out against Supaba
     await new Promise<void>((r) => server.close(() => r()));
   }
 });
+
+test("token, revoke and the sign-in pages are rate limited per instance", async () => {
+  const { createOAuthRouter } = await import("../src/oauth.ts");
+  const app = express();
+  app.use(createOAuthRouter({
+    publicUrl: "https://mcp.example.com", redirectHosts: ["claude.ai"], pepper: randomBytes(32),
+    db: { query: async () => { throw new Error("not reached"); } },
+    identity: { signInUrl: () => "https://idp.test", exchange: async () => { throw new Error("x"); }, signOut: async () => {} },
+    limits: { browserPerMinute: 2, tokenPerMinute: 2, registerPerHour: 1 },
+  }));
+  const server = await new Promise<import("node:http").Server>((r) => {
+    const s = app.listen(0, "127.0.0.1", () => r(s));
+  });
+  try {
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const token = (clientId: string) => fetch(`${base}/oauth/token`, {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "authorization_code", client_id: clientId, code: "nope" }),
+    }).then((r) => r.status);
+    assert.deepEqual([await token("epc_a"), await token("epc_a"), await token("epc_a")], [400, 400, 429]);
+    assert.equal(await token("epc_b"), 400, "another client has its own budget");
+    const cb = () => fetch(`${base}/oauth/callback`).then((r) => r.status);
+    assert.deepEqual([await cb(), await cb(), await cb()], [400, 400, 429]);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});

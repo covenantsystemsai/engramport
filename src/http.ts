@@ -22,6 +22,7 @@
 
 import express, { Request, Response, Router } from "express";
 import cors from "cors";
+import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import { createMcpServer, defaultDeps, McpDeps, VERSION } from "./server.js";
@@ -37,6 +38,8 @@ export interface HttpAppOptions {
   resourceMetadataUrl?: string;
   /** Checks a key before any route runs: false means unknown, revoked or expired. */
   authenticate?: (key: string) => Promise<boolean>;
+  /** Requests per minute per key (or per address without one) on one instance. Default 600. */
+  requestsPerMinute?: number;
 }
 
 export function createHttpApp(opts: HttpAppOptions): express.Express {
@@ -70,6 +73,23 @@ export function createHttpApp(opts: HttpAppOptions): express.Express {
       id: null,
     });
   };
+
+  // Bounds the load one caller can put on the key check and the tools. Keyed
+  // by the key's public prefix, so many people behind one address (claude.ai)
+  // don't share a budget, and by address when there is no key.
+  app.use(rateLimit({
+    windowMs: 60_000,
+    limit: opts.requestsPerMinute ?? 600,
+    keyGenerator: (req) => {
+      const key = keyFromHeaders(req.headers);
+      return key ? `k:${key.split(".")[0].slice(0, 40)}` : `ip:${ipKeyGenerator(req.ip ?? "unknown")}`;
+    },
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    handler: (_req, res) => {
+      res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: "Too many requests" }, id: null });
+    },
+  }));
 
   // Everything below needs a caller key. The key is bound to this request's
   // async context and forwarded to the backend in place of any server key.

@@ -1,0 +1,72 @@
+# Retrieval benchmark for Supabase's built-in embedding model, gte-small.
+# Runs the model on the runner (transformers.js, the gte-small weights Supabase
+# publishes) against a throwaway pgvector database, over made-up fixtures only.
+# No secrets, and no text goes to any embedding service. Results land in the
+# job summary and as an artifact. It reports; it does not gate merges.
+name: embedding benchmark
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "bench/**"
+      - "src/embeddings.ts"
+      - "src/store/**"
+      - "db/migrations/**"
+      - "test/fixtures/eval-*.json"
+      - ".github/workflows/embedding-bench.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  gte-small:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.0-pg17
+        env:
+          # Throwaway container that lives only for this job.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Only this job needs the model runtime, so it is installed here, pinned,
+      # and never added to the package's dependencies.
+      - name: Install the model runtime
+        run: npm install --no-save @huggingface/transformers@4.3.1
+
+      - name: Migrations
+        env:
+          ADMIN_URL: postgresql://postgres@localhost:5432
+        run: |
+          psql "$ADMIN_URL/postgres" -X -q -v ON_ERROR_STOP=1 -c 'CREATE DATABASE bench'
+          DATABASE_URL="$ADMIN_URL/bench" db/migrate.sh
+
+      - name: Benchmark
+        env:
+          BENCH_DATABASE_URL: postgresql://postgres@localhost:5432/bench
+        run: npx tsx bench/embeddings.ts
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: embedding-bench
+          path: bench-results.json
+          if-no-files-found: ignore

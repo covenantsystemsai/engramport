@@ -1,0 +1,25 @@
+{
+  "about": "Held-out questions over the eval-basic.json memories, written separately from the tuned set and never used to tune any retriever. Most share no words with the memory that answers them, so they measure search by meaning. Made up: no real people, clients or places.",
+  "questions": [
+    { "question": "Which weekday do we push new builds to production?", "expect": ["deploy"] },
+    { "question": "How often does the toner get swapped?", "expect": ["d3"] },
+    { "question": "Where can I find the presentation deck?", "expect": ["d5"] },
+    { "question": "When do I renew my car permit for the lot?", "expect": ["d4"] },
+    { "question": "Is there somewhere to heat up my food?", "expect": ["x14"] },
+    { "question": "How many people fit in the meeting room?", "expect": ["x8"] },
+    { "question": "Who clears the snow?", "expect": ["x13"] },
+    { "question": "Where is the espresso maker?", "expect": ["d1"] },
+    { "question": "What day is the team meal?", "expect": ["d2"] },
+    { "question": "When are customers charged each month?", "expect": ["billing"] },
+    { "question": "What permissions does a freshly added bot get?", "expect": ["onboard"] },
+    { "question": "How are API credentials protected at rest?", "expect": ["pr"] },
+    { "question": "When was the water pump swapped out?", "expect": ["pump"] },
+    { "question": "What phone number do we call for our supplier?", "expect": ["contact"] },
+    { "question": "Where do guests check in when they arrive?", "expect": ["x9"] },
+    { "question": "What are the working hours?", "expect": ["d6"] },
+    { "question": "Which day does the trash for recycling get collected?", "expect": ["x7"] },
+    { "question": "Did the lift pass its safety check?", "expect": ["x10"] },
+    { "question": "Where do I get my ID card made?", "expect": ["x15"] },
+    { "question": "How often do we practise evacuating the building?", "expect": ["x5"] }
+  ]
+}

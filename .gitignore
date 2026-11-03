@@ -11,3 +11,4 @@ Thumbs.db
 .idea/
 coverage/
 *.tgz
+bench-results.json

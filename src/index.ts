@@ -23,6 +23,7 @@ import { createHttpApp } from "./http.js";
 import { setCallerRequired } from "./caller.js";
 import { runDoctor } from "./doctor.js";
 import { prewarmToken } from "./auth.js";
+import { decodePepper } from "./keys.js";
 
 // CLI: `node dist/index.js prewarm` mints an OIDC token in this process and
 // writes the cross-process disk cache, then exits. Run from a working shell
@@ -65,7 +66,28 @@ validateConfig(config.mode);
 // HTTP Server (for remote bots)
 // ═══════════════════════════════════════════════════════════
 
-function startHTTP() {
+/** The Postgres store checks every key up front; OAuth adds sign-in on top. */
+async function hostedAuth() {
+  if (config.store !== "postgres") return {};
+  const { sharedPool, sharedStore } = await import("./tools/store.js");
+  const store = sharedStore();
+  const authenticate = (key: string) => store.checkKey(key);
+  if (!config.oauth) return { authenticate };
+  const { createOAuthRouter, resourceMetadataUrl, supabaseIdentity } = await import("./oauth.js");
+  return {
+    authenticate,
+    resourceMetadataUrl: resourceMetadataUrl(config.publicUrl),
+    oauth: createOAuthRouter({
+      publicUrl: config.publicUrl,
+      redirectHosts: config.oauthRedirectHosts,
+      pepper: decodePepper(config.keyPepper)!,
+      db: sharedPool(),
+      identity: supabaseIdentity(config.supabaseUrl, config.supabasePublishableKey),
+    }),
+  };
+}
+
+async function startHTTP() {
   // A single malformed request or async handler rejection must not take the whole
   // process down (Express 4 does not catch async throws). Log and stay up.
   process.on("unhandledRejection", (reason) => console.error("[engramport] unhandledRejection:", reason));
@@ -73,7 +95,7 @@ function startHTTP() {
 
   // Hosted mode: every backend call must carry the caller's own key.
   setCallerRequired(true);
-  const app = createHttpApp({ apiUrl: config.apiUrl, namespace: config.namespace });
+  const app = createHttpApp({ apiUrl: config.apiUrl, namespace: config.namespace, ...(await hostedAuth()) });
 
   app.listen(config.port, "0.0.0.0", () => {
     // Banner to STDERR unconditionally. stdout is reserved for protocol output
@@ -121,5 +143,5 @@ if (config.mode === "stdio") {
     console.error("[EngramPort] Running in stdio mode (Claude Desktop)");
   });
 } else {
-  startHTTP();
+  await startHTTP();
 }

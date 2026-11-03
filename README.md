@@ -138,6 +138,20 @@ On this store `recall` takes a `mode`. The default, `hybrid`, runs three retriev
 
 An extraction job (in progress) will read each new memory with a model and add the entities and relations it finds to the graph, marked as extracted so they are never mistaken for an agent's own claims. Each memory is read once per extractor version, a near spelling of an entity the namespace can read is reused rather than duplicated, a quote is kept only if it is in the memory word for word, and a failure is stored as a short class such as `timeout`, never as the provider's message. The job runs only as a server-side job; no agent tool can start it or write extracted rows. Which model it uses is not settled yet, so it does not run anywhere today.
 
+#### Sign in with Google (OAuth, preview)
+
+With `ENGRAMPORT_OAUTH=true`, a hosted server on the Postgres store lets claude.ai and other MCP clients connect without a pasted key. The client finds the sign-in from the 401 on `/mcp`, registers itself, and sends the person to sign in with Google (through Supabase Auth). The server then shows the namespaces that Google email is a member of; the person picks one, and the client gets a key for that namespace only, valid for an hour, with a refresh token that works once and is replaced each time. Reusing a code or a refresh token revokes the whole grant. Memberships are added and revoked with `engramport admin` (coming in the next change); the database rules are in `db/README.md`.
+
+| Variable | Required | What it does |
+|---|---|---|
+| `ENGRAMPORT_OAUTH` | no | `true` turns sign-in on. Off by default. |
+| `ENGRAMPORT_PUBLIC_URL` | oauth | The server's public origin, like `https://mcp.example.com`, https and nothing after the host. It is the issuer, and `/mcp` under it is the resource. |
+| `ENGRAMPORT_SUPABASE_URL` | oauth | The Supabase project whose Auth has the Google provider on. Add `<public URL>/oauth/callback` to that project's allowed redirect URLs. |
+| `ENGRAMPORT_SUPABASE_PUBLISHABLE_KEY` | oauth | That project's publishable key. It is sent to Supabase Auth only. |
+| `ENGRAMPORT_OAUTH_REDIRECT_HOSTS` | no | Hosts a client may register an https redirect on. Default `claude.ai,claude.com`. Loopback `http` is always allowed, for local tools. |
+
+Every key on the Postgres store, OAuth or not, is now checked before a request runs, so an unknown, revoked or expired key gets a 401 rather than a tool error.
+
 #### Managing namespaces and keys
 
 `engramport admin` creates namespaces and actors and mints, rotates and revokes keys for this store. It also shows the audit trail. It runs as the `engramport_admin` database role, which can do exactly that and nothing more: it cannot read memories, embeddings, graph rows or stored key hashes, it sees provenance metadata but never content, and it cannot delete anything.

@@ -226,6 +226,21 @@ export class PostgresStore {
   }
 
   /**
+   * True if the key would authenticate right now. The hosted server asks this
+   * before any route runs, so an expired OAuth access token gets a 401 the
+   * client can act on. A database error throws (it is not an answer).
+   */
+  async checkKey(rawKey: string): Promise<boolean> {
+    const parsed = parseKey(rawKey ?? "");
+    if (!parsed) return false;
+    const r = await this.pool.query("SELECT 1 FROM memory.authenticate($1, $2)", [
+      parsed.prefix,
+      hashKey(parsed.key, this.opts.pepper),
+    ]);
+    return r.rows.length === 1;
+  }
+
+  /**
    * Run fn in one transaction as the key's caller. A missing, malformed,
    * unknown, revoked or expired key, or one whose agent is disabled, is refused
    * before fn runs.

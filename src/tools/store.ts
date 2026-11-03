@@ -8,6 +8,8 @@
  * PRs, so they answer with a clear error instead of reaching the old backend.
  */
 
+import type pg from "pg";
+
 import { config } from "../config.js";
 import { backendKey } from "../caller.js";
 import { openAIEmbedder } from "../embeddings.js";
@@ -20,13 +22,20 @@ type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: bo
 const NOT_YET = new Set(["chat", "groom", "dream", "export_graph"]);
 
 let shared: PostgresStore | undefined;
+let sharedPg: pg.Pool | undefined;
+
+/** The process-wide pool, as engramport_app. The store and OAuth share it. */
+export function sharedPool(): pg.Pool {
+  sharedPg ??= createPool(config.databaseUrl, config.databaseCaFile || undefined);
+  return sharedPg;
+}
 
 /** The process-wide store, built from config on first use. */
 export function sharedStore(): PostgresStore {
   if (!shared) {
     const pepper = decodePepper(config.keyPepper);
     if (!pepper) throw new Error("ENGRAMPORT_KEY_PEPPER is missing or too short");
-    shared = new PostgresStore(createPool(config.databaseUrl, config.databaseCaFile || undefined), {
+    shared = new PostgresStore(sharedPool(), {
       pepper,
       embedder: config.openaiApiKey ? openAIEmbedder(config.openaiApiKey) : undefined,
       transport: config.mode === "stdio" ? "stdio" : "streamable_http",

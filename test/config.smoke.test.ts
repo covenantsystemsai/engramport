@@ -102,3 +102,24 @@ test("postgres store: refuses admin roles, weak sslmode and a local db when host
   assert.match(configProblems(pg(local), "http")[0], /points at this machine/);
   assert.equal(configProblems(pg(local), "stdio").length, 0);
 });
+
+test("oauth: off by default; when on it needs postgres, http mode, an https public origin and Supabase Auth", () => {
+  const db = { ENGRAMPORT_DATABASE_URL: "postgresql://engramport_app@db.example.com:5432/postgres" };
+  const on = {
+    ...db,
+    ENGRAMPORT_OAUTH: "true",
+    ENGRAMPORT_PUBLIC_URL: "https://mcp.example.com",
+    ENGRAMPORT_SUPABASE_URL: "https://ref.supabase.co",
+    ENGRAMPORT_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test",
+  };
+  assert.equal(resolveConfig(env({})).oauth, false);
+  assert.deepEqual(resolveConfig(env({})).oauthRedirectHosts, ["claude.ai", "claude.com"]);
+  assert.deepEqual(configProblems(pg(on), "http"), []);
+  assert.match(configProblems(pg(on), "stdio").join(" "), /http mode only/);
+  assert.match(configProblems(resolveConfig(env({ ENGRAMPORT_OAUTH: "true", ENGRAMPORT_API_URL: "https://api.example.com" })), "http")[0],
+    /needs ENGRAMPORT_STORE=postgres/);
+  assert.match(configProblems(pg({ ...on, ENGRAMPORT_PUBLIC_URL: "http://mcp.example.com" }), "http").join(" "), /PUBLIC_URL must use https/);
+  assert.match(configProblems(pg({ ...on, ENGRAMPORT_PUBLIC_URL: "https://mcp.example.com/x" }), "http").join(" "), /origin only/);
+  assert.match(configProblems(pg({ ...on, ENGRAMPORT_SUPABASE_PUBLISHABLE_KEY: "" }), "http").join(" "), /PUBLISHABLE_KEY is not set/);
+  assert.match(configProblems(pg({ ...on, ENGRAMPORT_SUPABASE_URL: "" }), "http").join(" "), /SUPABASE_URL is not set/);
+});

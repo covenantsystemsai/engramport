@@ -175,7 +175,7 @@ Classes, as §23 defines them:
 | 9 | Temporal, supersession and evidence-aware ranking | Partial | Recency and supersession filtering, yes; validity windows and evidence, no |
 | 9 | Entity disambiguation, duplicate consolidation | Partial | Type plus normalized name, fuzzy candidates. No merge |
 | 9 | Query types benchmarked | Missing | Six questions, no labels by query type |
-| 9 | Extraction pipeline rules | Undertested | Tenant scoped, idempotent, retried, verbatim-quote checked, origin marked, all tested. No model adapter, so never run end to end, and no reprocessing on a new extractor version |
+| 9 | Extraction pipeline rules | Undertested | Tenant scoped, idempotent, retried, verbatim-quote checked, origin marked, and a new extractor version reads each memory again, all tested. No model adapter, so never run end to end |
 | 9 | Eval metrics and baselines | Partial | Recall@K and MRR across hybrid, vector, keyword and graph. No nDCG, citation accuracy, temporal correctness, leakage rate, latency, cost or tokens; no held-out set |
 | 10 | Cross-agent collaboration | Partial | Several actors can share a cell, with durable ids and server attribution. No verify or challenge step, no expected-version writes |
 | 11 | ChatGPT connector | Undertested | OAuth metadata, DCR, PKCE, refresh and revocation exist and pass local HTTP tests. Never tried in ChatGPT or claude.ai. Tool naming needs a decision (below) |

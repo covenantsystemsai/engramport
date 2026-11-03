@@ -45,6 +45,7 @@ describe("oauth over http", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABAS
   const pending = new Map<string, { challenge: string; email: string }>();
   const signedOut: string[] = [];
   let nextEmail = email;
+  let nextTokenSize = 0;
   const identity: IdentityProvider = {
     signInUrl(challenge, returnTo) {
       assert.equal(returnTo, `${ISSUER}/oauth/callback`);
@@ -57,7 +58,7 @@ describe("oauth over http", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABAS
       pending.delete(code);
       if (!p || s256(verifier) !== p.challenge) throw new Error("bad code");
       const s = await signInWithGoogle(admin, p.email);
-      return { ...s, accessToken: `sb-${s.sessionId}` };
+      return { ...s, accessToken: `sb-${s.sessionId}${"x".repeat(nextTokenSize)}` };
     },
     async signOut(token) {
       signedOut.push(token);
@@ -393,6 +394,32 @@ describe("oauth over http", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABAS
     });
     assert.equal(res.status, 400);
     assert.equal(openState(randomBytes(32), sealed), undefined, "another server's pepper cannot open it");
+  });
+
+  test("a long state and a large Supabase token still fit in one cookie; write alone means read and write", async () => {
+    const clientId = await register();
+    const v = randomBytes(32).toString("base64url");
+    const state = "s".repeat(512);
+    nextTokenSize = 3000;
+    try {
+      const before = signedOut.length;
+      const { cookie, csrf } = await toChoice(clientId, s256(v), { state, scope: "write" });
+      assert.ok(cookie.length < 3600, `cookie is ${cookie.length} characters`);
+      const d = await decide(cookie, { csrf, member_id: memberId, action: "approve" });
+      assert.equal(d.status, 302);
+      const back = new URL(d.headers.get("location")!);
+      assert.equal(back.searchParams.get("state"), state);
+      assert.equal(signedOut.length, before, "a token too big to carry is left to lapse");
+      const t = await token({
+        grant_type: "authorization_code", client_id: clientId, code: back.searchParams.get("code")!, code_verifier: v, redirect_uri: CALLBACK,
+      });
+      assert.equal(t.status, 200);
+      assert.equal(t.body.scope, "read write");
+    } finally {
+      nextTokenSize = 0;
+    }
+    const tooLong = await fetch(authorizeUrl(clientId, s256(v), { state: "s".repeat(513) }), { redirect: "manual" });
+    assert.equal(new URL(tooLong.headers.get("location")!).searchParams.get("error"), "invalid_request");
   });
 
   test("registration takes allowed redirect hosts and public clients only", async () => {

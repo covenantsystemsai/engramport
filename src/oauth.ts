@@ -72,6 +72,9 @@ export interface OAuthOptions {
 
 const STATE_COOKIE = "__Host-ep_oauth";
 const STATE_TTL_MS = 10 * 60 * 1000;
+/** Browsers drop a cookie over about 4 KB, name and attributes included. */
+const MAX_SEALED = 3500;
+const MAX_STATE = 512;
 const CHALLENGE = /^[A-Za-z0-9_-]{43}$/;
 const CODE = /^epa_[A-Za-z0-9_-]{43}$/;
 const REFRESH = /^epr_[A-Za-z0-9_-]{43}$/;
@@ -108,7 +111,8 @@ interface ChooseState extends Omit<LoginState, "step" | "idpVerifier"> {
   step: "choose";
   userId: string;
   sessionId: string;
-  idpToken: string;
+  /** Absent when it would not fit in the cookie. */
+  idpToken?: string;
   csrf: string;
 }
 
@@ -168,7 +172,7 @@ function clearStateCookie(res: Response): void {
  * loopback (native apps and local tools). No credentials, no fragment.
  */
 export function redirectAllowed(uri: string, hosts: string[]): boolean {
-  if (typeof uri !== "string" || uri.length > 2000 || /[\s\x00-\x1f\x7f#]/.test(uri)) return false;
+  if (typeof uri !== "string" || uri.length > 512 || /[\s\x00-\x1f\x7f#]/.test(uri)) return false;
   let url: URL;
   try {
     url = new URL(uri);
@@ -180,13 +184,17 @@ export function redirectAllowed(uri: string, hosts: string[]): boolean {
   return url.protocol === "https:" && hosts.includes(url.hostname.toLowerCase());
 }
 
-/** "read write" → ["read", "write"]; undefined for anything else. Empty means all. */
-function parseScope(scope: unknown): string[] | undefined {
+/**
+ * "read write" → ["read", "write"]; undefined for anything else. Empty means
+ * all. Every grant can read (the database insists), so "write" alone means
+ * read and write.
+ */
+export function parseScope(scope: unknown): string[] | undefined {
   if (scope === undefined || scope === "") return [...OAUTH_SCOPES];
   if (typeof scope !== "string") return undefined;
   const parts = [...new Set(scope.split(" ").filter(Boolean))];
   if (!parts.length || parts.some((s) => !(OAUTH_SCOPES as readonly string[]).includes(s))) return undefined;
-  return OAUTH_SCOPES.filter((s) => parts.includes(s));
+  return OAUTH_SCOPES.filter((s) => s === "read" || parts.includes(s));
 }
 
 const one = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
@@ -379,7 +387,7 @@ export function createOAuthRouter(opts: OAuthOptions): Router {
     const state = one(q.state);
     const back = (error: string, description: string) =>
       backToClient(res, issuer, redirectUri, state, { error, error_description: description });
-    if (state !== undefined && state.length > 1024) return back("invalid_request", "state is too long");
+    if (state !== undefined && state.length > MAX_STATE) return back("invalid_request", "state is too long");
     if (q.response_type !== "code") return back("unsupported_response_type", "response_type must be code");
     if (q.code_challenge_method !== "S256") return back("invalid_request", "PKCE with S256 is required");
     const challenge = one(q.code_challenge);
@@ -392,7 +400,7 @@ export function createOAuthRouter(opts: OAuthOptions): Router {
     if (!scopes) return back("invalid_scope", "scope may hold read and write only");
 
     const idpVerifier = b64url(randomBytes(32));
-    setStateCookie(res, sealState(pepper, {
+    const sealed = sealState(pepper, {
       step: "login",
       exp: Date.now() + STATE_TTL_MS,
       clientId: clientId!,
@@ -401,7 +409,9 @@ export function createOAuthRouter(opts: OAuthOptions): Router {
       challenge,
       scopes,
       idpVerifier,
-    }));
+    });
+    if (sealed.length > MAX_SEALED) return back("invalid_request", "the request is too large");
+    setStateCookie(res, sealed);
     res.set("Cache-Control", "no-store").redirect(302, identity.signInUrl(s256(idpVerifier), `${issuer}/oauth/callback`));
   }));
 
@@ -433,7 +443,7 @@ export function createOAuthRouter(opts: OAuthOptions): Router {
       ),
     ]);
     const csrf = b64url(randomBytes(24));
-    setStateCookie(res, sealState(pepper, {
+    const choose: ChooseState = {
       step: "choose",
       exp: Date.now() + STATE_TTL_MS,
       clientId: flow.clientId,
@@ -445,7 +455,15 @@ export function createOAuthRouter(opts: OAuthOptions): Router {
       sessionId: who.sessionId,
       idpToken: who.accessToken,
       csrf,
-    }));
+    };
+    let sealed = sealState(pepper, choose);
+    if (sealed.length > MAX_SEALED) {
+      // A large Supabase token would push the cookie past what browsers keep.
+      // It is only needed to end the Supabase session early, so drop it and
+      // let that session lapse on its own (no one holds its refresh token).
+      sealed = sealState(pepper, { ...choose, idpToken: undefined });
+    }
+    setStateCookie(res, sealed);
 
     const app = escape(client.rows[0]?.client_name ?? "An app");
     const host = escape(new URL(flow.redirectUri).host);
@@ -478,7 +496,7 @@ export function createOAuthRouter(opts: OAuthOptions): Router {
       return page(res, 400, "Sign-in expired", "<p>This sign-in has expired or was opened in another browser. Start again from the app.</p>");
     }
     clearStateCookie(res);
-    const done = () => identity.signOut(flow.idpToken).catch(() => undefined);
+    const done = () => (flow.idpToken ? identity.signOut(flow.idpToken).catch(() => undefined) : Promise.resolve());
     const memberId = one(req.body?.member_id);
     if (req.body?.action !== "approve" || !memberId || !UUID.test(memberId)) {
       await done();

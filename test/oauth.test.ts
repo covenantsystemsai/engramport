@@ -6,7 +6,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import express from "express";
 
-import { openState, redirectAllowed, sealState, supabaseIdentity } from "../src/oauth.ts";
+import { openState, parseScope, redirectAllowed, sealState, supabaseIdentity } from "../src/oauth.ts";
 
 test("redirectAllowed: https on a listed host, or http on loopback, nothing else", () => {
   const hosts = ["claude.ai", "claude.com"];
@@ -17,6 +17,7 @@ test("redirectAllowed: https on a listed host, or http on loopback, nothing else
   for (const bad of [
     "https://claude.ai.evil.test/cb", "https://evil.test/cb", "http://claude.ai/cb", "https://a:b@claude.ai/cb",
     "https://claude.ai/cb#frag", "https://claude.ai/c b", "javascript:alert(1)", "not a url", "http://10.0.0.1/cb",
+    `https://claude.ai/${"x".repeat(500)}`,
   ]) {
     assert.equal(redirectAllowed(bad, hosts), false, bad);
   }
@@ -120,4 +121,14 @@ test("token, revoke and the sign-in pages are rate limited per instance", async 
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
+});
+
+test("parseScope: read and write only, and every grant can read", () => {
+  assert.deepEqual(parseScope(undefined), ["read", "write"]);
+  assert.deepEqual(parseScope("read"), ["read"]);
+  assert.deepEqual(parseScope("write"), ["read", "write"]);
+  assert.deepEqual(parseScope("write read write"), ["read", "write"]);
+  assert.equal(parseScope("admin"), undefined);
+  assert.equal(parseScope("read admin"), undefined);
+  assert.equal(parseScope(" "), undefined);
 });

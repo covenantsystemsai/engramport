@@ -118,6 +118,23 @@ Applying to a real project needs the owner's yes first.
   The match is made in the store, only among entities the key can read and of
   the same type, and only when one candidate is clearly ahead of the next.
 
+## Search (0008)
+
+- `memory.search(query, embedding, model, kind, from, to, limit, retrievers)`
+  answers a recall in one round trip with three retrievers: vector (HNSW,
+  same embedding model only), keyword (full-text, any word may match) and
+  graph (entities the query names, a walk of up to two hops over active
+  relations of confidence 0.5 or more, and the memories that mention what it
+  reaches).
+- A vector hit scores its cosine similarity, a keyword hit its full-text rank
+  scaled against the best in that search, and a graph hit how closely the
+  query names its entity, times 0.7 a hop. Relevance is 40% semantic and 25% lexical, a graph hit counting in both,
+  and it multiplies a 65% base plus up to 20% recency (90-day decay), 10%
+  kind and 5% provenance quality. Hits under 5% relevance are dropped, and a
+  tie at four places goes to the nearest namespace.
+- It runs with the caller's rights, so row security decides every row; only
+  `engramport_app` may run it, and the admin and API roles can't.
+
 ## Run the tests locally
 
 Needs Postgres 17 with pgvector 0.7 or later, as a database you can throw away:

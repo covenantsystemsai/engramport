@@ -29,6 +29,9 @@ export const MEMORY_KINDS: readonly MemoryKind[] = [
   "fact", "decision", "note", "summary", "insight", "principle", "hypothesis", "document_chunk",
 ];
 export type Transport = "stdio" | "streamable_http" | "rest" | "job";
+/** hybrid (the default) blends vector, keyword and graph; the others run one retriever alone. */
+export type RecallMode = "hybrid" | "vector" | "keyword" | "graph";
+export const RECALL_MODES: readonly RecallMode[] = ["hybrid", "vector", "keyword", "graph"];
 
 export type StoreErrorCode = "unauthorized" | "forbidden" | "not_found" | "invalid";
 
@@ -72,7 +75,7 @@ export interface RememberInput {
 export interface RecallInput {
   query: string;
   topK?: number;
-  mode?: "vector" | "keyword";
+  mode?: RecallMode;
   kind?: MemoryKind;
   minScore?: number;
   dateFrom?: string;
@@ -145,6 +148,13 @@ interface Row {
   metadata: Record<string, unknown>;
   supersedes_id: string | null;
   score?: number;
+  level?: string;
+  depth?: number;
+  vector_rank?: number | null;
+  keyword_rank?: number | null;
+  graph_rank?: number | null;
+  graph_entity?: string | null;
+  graph_hops?: number | null;
   written_by: string | null;
   tool: string | null;
   transport: string | null;
@@ -174,7 +184,9 @@ function present(row: Row, ctx: KeyContext) {
     status: row.status,
     namespace: row.namespace,
     inherited: row.namespace_id !== ctx.namespaceId,
+    ...(row.level !== undefined ? { level: row.level } : {}),
     ...(row.score !== undefined ? { score: Number(Number(row.score).toFixed(4)) } : {}),
+    ...(row.depth !== undefined ? { retrieved_by: retrievedBy(row) } : {}),
     created_at: row.created_at.toISOString(),
     metadata: row.metadata,
     ...(row.supersedes_id ? { supersedes: row.supersedes_id } : {}),
@@ -190,6 +202,18 @@ function present(row: Row, ctx: KeyContext) {
         }
       : null,
   };
+}
+
+/** Why a hybrid or graph hit came back: each retriever that found it, with its rank. */
+function retrievedBy(row: Row) {
+  const out: Array<{ via: "vector" | "keyword" | "graph"; rank: number; entity?: string; hops?: number }> = [];
+  if (row.vector_rank != null) out.push({ via: "vector", rank: row.vector_rank });
+  if (row.keyword_rank != null) out.push({ via: "keyword", rank: row.keyword_rank });
+  if (row.graph_rank != null) {
+    out.push({ via: "graph", rank: row.graph_rank, ...(row.graph_entity ? { entity: row.graph_entity } : {}),
+      ...(row.graph_hops != null ? { hops: row.graph_hops } : {}) });
+  }
+  return out;
 }
 
 export class PostgresStore {
@@ -442,8 +466,17 @@ export class PostgresStore {
     const to = isoOrNull(input.dateTo, "date_to");
     const warnings: string[] = [];
 
-    let mode = input.mode ?? (this.opts.embedder ? "vector" : "keyword");
+    if (input.mode !== undefined && !RECALL_MODES.includes(input.mode)) {
+      throw new StoreError("invalid", `mode must be one of ${RECALL_MODES.join(", ")}`);
+    }
+    let mode: RecallMode = input.mode ?? "hybrid";
     let queryVector: number[] | null = null;
+    if (mode === "hybrid" && this.opts.embedder) {
+      await this.preflight(rawKey, input.namespace, false);
+      const e = await this.embedOrNull([input.query]);
+      if (e.vectors) queryVector = e.vectors[0];
+      else warnings.push(`vector search unavailable (${e.warning}); blended keyword and graph only`);
+    }
     if (mode === "vector") {
       await this.preflight(rawKey, input.namespace, false);
       const e = await this.embedOrNull([input.query]);
@@ -457,6 +490,33 @@ export class PostgresStore {
     return this.withKey(rawKey, async (c, ctx) => {
       PostgresStore.checkNamespace(ctx, input.namespace);
       let rows: Row[];
+      if (mode === "hybrid" || mode === "graph") {
+        const retrievers = mode === "graph" ? ["graph"] : [...(queryVector ? ["vector"] : []), "keyword", "graph"];
+        if (queryVector && (await this.supportsIterativeScan(c))) {
+          await c.query("SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true)");
+        }
+        const r = await c.query<Row>(
+          `SELECT ${MEMORY_COLUMNS}, n.level::text AS level, s.score, s.depth, s.vector_rank, s.keyword_rank,
+                  s.graph_rank, s.graph_entity, s.graph_hops
+           FROM memory.search(p_query => $1, p_embedding => $2, p_model => $3, p_kind => $4::memory.memory_kind,
+                              p_from => $5, p_to => $6, p_limit => $7, p_retrievers => $8) s
+           JOIN memory.memories m ON m.id = s.memory_id
+           ${MEMORY_JOINS}
+           ORDER BY round(s.score::numeric, 4) DESC, s.depth, m.created_at DESC, m.id`,
+          [input.query, queryVector ? vectorLiteral(queryVector) : null, this.opts.embedder?.model ?? null, kind,
+            from, to, topK, retrievers],
+        );
+        rows = r.rows;
+        if (input.minScore !== undefined) warnings.push("min_score applies to vector search only");
+        return {
+          mode,
+          retrievers,
+          namespace: ctx.namespace,
+          note: UNTRUSTED_NOTE,
+          results: rows.map((row) => present(row, ctx)),
+          ...(warnings.length ? { warnings } : {}),
+        };
+      }
       if (mode === "vector" && queryVector) {
         if (await this.supportsIterativeScan(c)) {
           // Keep scanning the index until enough rows survive row security and filters.

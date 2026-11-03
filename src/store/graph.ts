@@ -174,12 +174,24 @@ const DEPTH = `
     SELECT n.id, n.parent_id, up.depth + 1 FROM memory.namespaces n JOIN up ON n.id = up.parent_id
   )`;
 
-async function findEntity(c: pg.PoolClient, ctx: KeyContext, ref: EntityRef): Promise<ResolvedEntity | null> {
+/**
+ * With live, only entities still standing on an active memory come back: an
+ * extracted entity whose every mentioning memory was retracted is hidden, as
+ * memory.entity_is_live (0010) says. Linking leaves it off, so a new mention
+ * reuses the entity instead of colliding with it.
+ */
+async function findEntity(
+  c: pg.PoolClient,
+  ctx: KeyContext,
+  ref: EntityRef,
+  opts: { live?: boolean } = {},
+): Promise<ResolvedEntity | null> {
+  const live = opts.live ? " AND memory.entity_is_live(e.id, e.origin)" : "";
   if ("id" in ref) {
     const r = await c.query<ResolvedEntity>(
       `SELECT e.id, e.name, e.type, n.path AS namespace, e.namespace_id, 'id' AS matched_by
        FROM memory.entities e JOIN memory.namespaces n ON n.id = e.namespace_id
-       WHERE e.id = $1 AND e.status = 'active'`,
+       WHERE e.id = $1 AND e.status = 'active'${live}`,
       [ref.id],
     );
     return r.rows[0] ?? null;
@@ -194,7 +206,7 @@ async function findEntity(c: pg.PoolClient, ctx: KeyContext, ref: EntityRef): Pr
        SELECT a.entity_id, 'alias', 1 FROM memory.entity_aliases a
        WHERE a.norm_key = memory.norm_key($3)
      ) m
-     JOIN memory.entities e ON e.id = m.id AND e.type = $2 AND e.status = 'active'
+     JOIN memory.entities e ON e.id = m.id AND e.type = $2 AND e.status = 'active'${live}
      JOIN memory.namespaces n ON n.id = e.namespace_id
      JOIN up ON up.id = e.namespace_id
      ORDER BY m.rank, up.depth, e.created_at
@@ -465,11 +477,11 @@ export async function getEntityTx(c: pg.PoolClient, ctx: KeyContext, input: GetE
   const limit = Math.min(50, Math.max(1, Math.floor(Number(input.memoryLimit ?? 10)) || 10));
   let ent: ResolvedEntity | null = null;
   if (input.id !== undefined) {
-    ent = await findEntity(c, ctx, { id: checkId(input.id, "entity_id") });
+    ent = await findEntity(c, ctx, { id: checkId(input.id, "entity_id") }, { live: true });
   } else {
     const name = checkName(input.name, "name");
     if (input.type !== undefined) {
-      ent = await findEntity(c, ctx, { name, type: checkType(input.type) });
+      ent = await findEntity(c, ctx, { name, type: checkType(input.type) }, { live: true });
     } else {
       const r = await c.query<ResolvedEntity>(
         `${DEPTH}
@@ -481,7 +493,7 @@ export async function getEntityTx(c: pg.PoolClient, ctx: KeyContext, input: GetE
            UNION ALL
            SELECT a.entity_id, 'alias', 1 FROM memory.entity_aliases a WHERE a.norm_key = memory.norm_key($2)
          ) m
-         JOIN memory.entities e ON e.id = m.id AND e.status = 'active'
+         JOIN memory.entities e ON e.id = m.id AND e.status = 'active' AND memory.entity_is_live(e.id, e.origin)
          JOIN memory.namespaces n ON n.id = e.namespace_id
          JOIN up ON up.id = e.namespace_id
          ORDER BY e.id, m.rank
@@ -527,6 +539,9 @@ export async function getEntityTx(c: pg.PoolClient, ctx: KeyContext, input: GetE
      JOIN memory.namespaces rn ON rn.id = r.namespace_id
      WHERE (r.source_entity_id = $1 OR r.target_entity_id = $1)
        AND r.status = 'active' AND o.status = 'active'
+       -- A relation stands on its evidence memory, and the other end must be
+       -- live too, so nothing quoted from a retracted memory comes back.
+       AND memory.relation_is_live(r.evidence_memory_id) AND memory.entity_is_live(o.id, o.origin)
      ORDER BY r.confidence DESC, r.created_at DESC
      LIMIT 200`,
     [ent.id],

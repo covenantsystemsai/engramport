@@ -11,6 +11,7 @@ import { randomBytes } from "node:crypto";
 import pg from "pg";
 
 import { hashKey, mintKey } from "../src/keys.ts";
+import type { Extractor } from "../src/store/extract.ts";
 import { PostgresStore, StoreError } from "../src/store/postgres.ts";
 import { executeStoreTool } from "../src/tools/store.ts";
 
@@ -271,5 +272,93 @@ describe("knowledge graph", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABAS
     assert.equal(JSON.parse(two.content[0].text).code, "invalid");
     const notArray = await executeStoreTool("link", { entities: "Grok" }, store, keys.cell1);
     assert.equal(JSON.parse(notArray.content[0].text).code, "invalid");
+  });
+  test("a relation whose evidence memory is retracted stops coming back, quote and all", async () => {
+    const t = randomBytes(3).toString("hex");
+    const org = `Quillon${t}`, partner = `Harborline${t}`, town = `Riverton${t}`;
+    const quote = `signed the lease with ${partner}`;
+    const m = await store.remember(keys.cell2, { content: `${org} ${quote} last week` });
+    await store.link(keys.cell2, {
+      relations: [{ source: { name: org, type: "org" }, predicate: "contracts_with", target: { name: partner, type: "org" }, evidence: quote }],
+      memoryId: m.id,
+    });
+    // A relation with no evidence memory stands on the agent's word alone.
+    await store.link(keys.cell2, {
+      relations: [{ source: { name: org, type: "org" }, predicate: "located_in", target: { name: town, type: "place" } }],
+    });
+    // Another memory about the org, reachable from the partner only through the evidenced relation.
+    const n = await store.remember(keys.cell2, { content: `${org} renewed its insurance` });
+    await store.link(keys.cell2, { entities: [{ name: org, type: "org" }], memoryId: n.id });
+
+    const before = await store.getEntity(keys.cell2, { name: org, type: "org" });
+    assert.ok("entity" in before);
+    assert.deepEqual(before.relations.map((r) => r.predicate).sort(), ["contracts_with", "located_in"]);
+    assert.ok(JSON.stringify(before).includes(quote), "the quote shows while its memory is active");
+    const walked = await store.recall(keys.cell2, { query: partner, mode: "graph", topK: 10 });
+    assert.ok(walked.results.some((r) => r.id === n.id), "the walk crosses the evidenced relation");
+
+    await store.retract(keys.cell2, m.id);
+
+    const after = await store.getEntity(keys.cell2, { name: org, type: "org" });
+    assert.ok("entity" in after);
+    assert.deepEqual(after.relations.map((r) => r.predicate), ["located_in"], "the unevidenced relation stays");
+    assert.ok(!JSON.stringify(after).includes(quote), "the quote is gone");
+    const fromPartner = await store.getEntity(keys.cell2, { name: partner, type: "org" });
+    assert.ok("entity" in fromPartner, "an asserted entity stays");
+    assert.equal(fromPartner.relations.length, 0, "and its relation is gone from that end too");
+    const unwalked = await store.recall(keys.cell2, { query: partner, mode: "graph", topK: 10 });
+    assert.ok(!unwalked.results.some((r) => r.id === n.id), "the walk no longer crosses it");
+    const direct = await store.recall(keys.cell2, { query: org, mode: "graph", topK: 10 });
+    assert.ok(direct.results.some((r) => r.id === n.id), "the org's own active memory still comes back");
+  });
+
+  test("an entity found only in a retracted memory stops coming back", async () => {
+    const t = randomBytes(3).toString("hex");
+    const name = `Zephyrine${t}`, other = `Alderwick${t}`;
+    const text = `${name} supplies ${other} with parts`;
+    const m = await store.remember(keys.cell2, { content: text });
+    const extractor: Extractor = {
+      id: `live-test-${t}/v1`,
+      async extract({ text: seen }) {
+        if (seen !== text) return { entities: [], relations: [] };
+        return {
+          entities: [{ name, type: "org" }, { name: other, type: "org" }],
+          relations: [{ source: { name, type: "org" }, predicate: "supplies", target: { name: other, type: "org" }, evidence: `${name} supplies ${other}` }],
+        };
+      },
+    };
+    await jobStore.extract(keys.cell2, extractor, { limit: 50 });
+    const found = await store.getEntity(keys.cell2, { name, type: "org" });
+    assert.ok("entity" in found);
+    assert.equal(found.entity.origin, "extracted");
+    const seeded = await store.recall(keys.cell2, { query: name, mode: "graph", topK: 10 });
+    assert.ok(seeded.results.some((r) => r.id === m.id));
+    // An agent relates it, on its own word, to an entity with an active memory.
+    const depot = `Brackenfold${t}`;
+    const q = await store.remember(keys.cell2, { content: `${depot} moved to a new site` });
+    await store.link(keys.cell2, { entities: [{ name: depot, type: "place" }], memoryId: q.id });
+    await store.link(keys.cell2, {
+      relations: [{ source: { name, type: "org" }, predicate: "ships_from", target: { name: depot, type: "place" } }],
+    });
+    const viaName = await store.recall(keys.cell2, { query: name, mode: "graph", topK: 10 });
+    assert.ok(viaName.results.some((r) => r.id === q.id), "the name seeds a walk to the depot");
+
+    await store.retract(keys.cell2, m.id);
+
+    const unseeded = await store.recall(keys.cell2, { query: name, mode: "graph", topK: 10 });
+    assert.ok(!unseeded.results.some((r) => r.id === q.id), "a hidden entity's name seeds nothing");
+
+    await fails(store.getEntity(keys.cell2, { name, type: "org" }), "not_found");
+    await fails(store.getEntity(keys.cell2, { name }), "not_found");
+    await fails(store.getEntity(keys.cell2, { id: found.entity.id }), "not_found");
+    await fails(store.getEntity(keys.cell2, { name: other, type: "org" }), "not_found");
+
+    // A new memory that mentions it brings it back, as the same entity.
+    const n = await store.remember(keys.cell2, { content: `${name} opened a second plant` });
+    await store.link(keys.cell2, { entities: [{ name, type: "org" }], memoryId: n.id });
+    const back = await store.getEntity(keys.cell2, { name, type: "org" });
+    assert.ok("entity" in back);
+    assert.equal(back.entity.id, found.entity.id);
+    assert.deepEqual(back.relations.map((r) => r.predicate), ["ships_from"], "the extracted relation stays with its retracted evidence");
   });
 });

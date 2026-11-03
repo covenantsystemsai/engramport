@@ -29,6 +29,7 @@ BEGIN; SELECT t.as_key(:'k_c3', :'c3');
   SELECT memory.remember('fact', 'quill gasket same words', 'remember', 'rest') AS tie_mem \gset
   SELECT memory.remember('fact', 'maintenance schedule for the yard', 'remember', 'rest') AS yard_mem \gset
   SELECT memory.remember('fact', 'weak link memory about the shed', 'remember', 'rest') AS shed_mem \gset
+  SELECT memory.remember('fact', 'inspection notes for the valve', 'remember', 'rest') AS valve_mem \gset
   UPDATE memory.memories SET status = 'retracted' WHERE id = :'gone_mem';
   SELECT memory.record_provenance('link', 'rest') AS prov \gset
   INSERT INTO memory.entities (namespace_id, type, name, provenance_id)
@@ -37,11 +38,15 @@ BEGIN; SELECT t.as_key(:'k_c3', :'c3');
     VALUES (:'c3', 'place', 'North Yard', :'prov') RETURNING id AS yard \gset
   INSERT INTO memory.entities (namespace_id, type, name, provenance_id)
     VALUES (:'c3', 'place', 'Old Shed', :'prov') RETURNING id AS shed \gset
+  INSERT INTO memory.entities (namespace_id, type, name, provenance_id)
+    VALUES (:'c3', 'equipment', 'Gate Valve', :'prov') RETURNING id AS valve \gset
   INSERT INTO memory.relations (namespace_id, source_entity_id, predicate, target_entity_id, confidence, provenance_id)
     VALUES (:'c3', :'pump', 'located_at', :'yard', 0.9, :'prov'),
-           (:'c3', :'pump', 'maybe_near', :'shed', 0.3, :'prov');
+           (:'c3', :'pump', 'maybe_near', :'shed', 0.3, :'prov'),
+           (:'c3', :'yard', 'has_part', :'valve', 0.9, :'prov');
   INSERT INTO memory.entity_mentions (memory_id, entity_id, namespace_id, provenance_id)
-    VALUES (:'yard_mem', :'yard', :'c3', :'prov'), (:'shed_mem', :'shed', :'c3', :'prov');
+    VALUES (:'yard_mem', :'yard', :'c3', :'prov'), (:'shed_mem', :'shed', :'c3', :'prov'),
+           (:'valve_mem', :'valve', :'c3', :'prov');
   INSERT INTO memory.memory_embeddings (memory_id, namespace_id, model, dimension, embedding)
     VALUES (:'yard_mem', :'c3', 'test-model', 1536,
             ('[' || array_to_string(array_fill(0.1::real, ARRAY[1536]), ',') || ']')::extensions.halfvec);
@@ -76,6 +81,9 @@ SELECT t.expect_count('on a tie the cell''s own memory comes before its tower''s
 SELECT t.expect_count('the graph finds a memory through an entity the query names, one hop away',
   format($$SELECT 1 FROM memory.search('zephyr pump', p_retrievers => ARRAY['graph'])
            WHERE memory_id = %L AND graph_entity = 'North Yard' AND graph_hops = 1 AND graph_rank = 1$$, :'yard_mem'), 1);
+SELECT t.expect_count('and two hops away, ranked after the nearer hop',
+  format($$SELECT 1 FROM memory.search('zephyr pump', p_retrievers => ARRAY['graph'])
+           WHERE memory_id = %L AND graph_entity = 'Gate Valve' AND graph_hops = 2 AND graph_rank = 2$$, :'valve_mem'), 1);
 SELECT t.expect_count('but not across a relation below the confidence floor',
   format($$SELECT 1 FROM memory.search('zephyr pump', p_retrievers => ARRAY['graph']) WHERE memory_id = %L$$, :'shed_mem'), 0);
 SELECT t.expect_count('vector search ranks by the query embedding',
@@ -90,9 +98,16 @@ SELECT t.expect_count('hybrid blends all three and keeps each rank',
 SELECT t.expect_count('kind and date filters apply',
   $$SELECT 1 FROM memory.search('zephyr pump', p_kind => 'decision', p_from => now() - interval '1 hour', p_limit => 50)$$, 1);
 SELECT t.expect_count('a search returns every match up to its limit',
-  $$SELECT 1 FROM memory.search('zephyr pump quill yard', p_limit => 1000)$$, 6);
+  $$SELECT 1 FROM memory.search('zephyr pump quill yard', p_limit => 1000)$$, 7);
 SELECT t.expect_count('and no more',
   $$SELECT 1 FROM memory.search('zephyr pump quill yard', p_limit => 2)$$, 2);
+ROLLBACK;
+
+BEGIN; SELECT t.as_key(:'k_c3', :'c3');
+UPDATE memory.entities SET status = 'retracted' WHERE id = :'yard';
+SELECT t.expect_count('a retracted entity breaks the path through it',
+  format($$SELECT 1 FROM memory.search('zephyr pump', p_retrievers => ARRAY['graph']) WHERE memory_id IN (%L, %L)$$,
+         :'yard_mem', :'valve_mem'), 0);
 ROLLBACK;
 
 \echo '-- what others can find'

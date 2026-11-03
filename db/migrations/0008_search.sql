@@ -116,6 +116,11 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, extensions AS $$
            w.hops + 1, w.seed_id, w.sim
     FROM walk w
     JOIN memory.relations r ON w.entity_id IN (r.source_entity_id, r.target_entity_id)
+    -- The walk only steps onto active entities, so a retracted one breaks every
+    -- path through it, as it does for get_entity, even though unlink keeps its
+    -- relations for the record.
+    JOIN memory.entities nx ON nx.status = 'active'
+     AND nx.id = CASE WHEN r.source_entity_id = w.entity_id THEN r.target_entity_id ELSE r.source_entity_id END
     WHERE w.hops < 2 AND r.status = 'active' AND r.confidence >= 0.5
   ),
   reached AS (

@@ -44,6 +44,25 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env) {
     /** Postgres store: embedding provider key. Without it, recall is keyword only. */
     openaiApiKey: env.OPENAI_API_KEY || "",
 
+    /**
+     * OAuth sign-in for hosted MCP clients (claude.ai). Off unless set to true.
+     * Needs the Postgres store, the public URL and Supabase Auth.
+     */
+    oauth: (env.ENGRAMPORT_OAUTH || "").toLowerCase() === "true",
+
+    /** The server's public origin (https, no path): the OAuth issuer. */
+    publicUrl: (env.ENGRAMPORT_PUBLIC_URL || "").replace(/\/+$/, ""),
+
+    /** Supabase project URL whose Auth signs people in with Google. */
+    supabaseUrl: (env.ENGRAMPORT_SUPABASE_URL || "").replace(/\/+$/, ""),
+
+    /** That project's publishable (anon) key, sent to Supabase Auth only. */
+    supabasePublishableKey: env.ENGRAMPORT_SUPABASE_PUBLISHABLE_KEY || "",
+
+    /** Hosts an OAuth client may register an https redirect on. */
+    oauthRedirectHosts: (env.ENGRAMPORT_OAUTH_REDIRECT_HOSTS || "claude.ai,claude.com")
+      .split(",").map((h) => h.trim().toLowerCase()).filter(Boolean),
+
     /** Allow a localhost backend in http mode (local development only). */
     allowLocalBackend: (env.ENGRAMPORT_ALLOW_LOCAL_BACKEND || "").toLowerCase() === "true",
 
@@ -87,6 +106,7 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"
  */
 export function configProblems(cfg: Config, mode: "stdio" | "http" = cfg.mode): string[] {
   if (cfg.store === "postgres") return postgresProblems(cfg, mode);
+  if (cfg.oauth) return ["ENGRAMPORT_OAUTH needs ENGRAMPORT_STORE=postgres."];
   if (cfg.store !== "eidetic") return [`ENGRAMPORT_STORE must be eidetic or postgres, not ${cfg.store}.`];
   const problems: string[] = [];
   if (!cfg.apiUrl) {
@@ -150,6 +170,36 @@ function postgresProblems(cfg: Config, mode: "stdio" | "http"): string[] {
   if (!decodePepper(cfg.keyPepper)) {
     problems.push("ENGRAMPORT_KEY_PEPPER is not set or shorter than 32 bytes.");
   }
+  if (cfg.oauth) problems.push(...oauthProblems(cfg, mode));
+  return problems;
+}
+
+/** An https origin with nothing after it, or http on this machine when allowed. */
+function originProblem(name: string, value: string, allowLocal: boolean): string | undefined {
+  if (!value) return `${name} is not set.`;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return `${name} is not a valid URL.`;
+  }
+  if (url.origin !== value) return `${name} must be an origin only, like https://mcp.example.com (no path or query).`;
+  const local = LOCAL_HOSTS.has(url.hostname);
+  if (url.protocol !== "https:" && !(local && allowLocal && url.protocol === "http:")) {
+    return `${name} must use https.`;
+  }
+  return undefined;
+}
+
+function oauthProblems(cfg: Config, mode: "stdio" | "http"): string[] {
+  const problems: string[] = [];
+  if (mode !== "http") problems.push("ENGRAMPORT_OAUTH works in http mode only.");
+  const pub = originProblem("ENGRAMPORT_PUBLIC_URL", cfg.publicUrl, cfg.allowLocalBackend);
+  if (pub) problems.push(pub);
+  const sb = originProblem("ENGRAMPORT_SUPABASE_URL", cfg.supabaseUrl, cfg.allowLocalBackend);
+  if (sb) problems.push(sb);
+  if (!cfg.supabasePublishableKey) problems.push("ENGRAMPORT_SUPABASE_PUBLISHABLE_KEY is not set.");
+  if (!cfg.oauthRedirectHosts.length) problems.push("ENGRAMPORT_OAUTH_REDIRECT_HOSTS lists no hosts.");
   return problems;
 }
 

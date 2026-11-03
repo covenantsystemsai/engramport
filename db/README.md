@@ -146,8 +146,12 @@ Applying to a real project needs the owner's yes first.
   are https, or http to this machine only, five at most.
 - `oauth_issue_code` checks, in the database, that the person signed in with
   Google through Supabase Auth in the last 15 minutes, with a verified email
-  that is the member's. So the server's own credentials can't issue a code
-  for anyone.
+  that is the member's. The session itself must be the Google sign-in
+  (recorded as OAuth, with the Google identity signing in as it started), not
+  a password or magic-link session on an account that also has Google. So the
+  server's own credentials can't issue a code for anyone.
+- A trade holds the member while it runs, so a membership revoked at the same
+  moment either stops the trade or revokes what it made.
 - `oauth_exchange_code` checks the PKCE verifier (S256) and spends the code,
   even on a failed try. A code used twice revokes what it was traded for.
 - The access token is an ordinary key that expires in an hour, tagged with

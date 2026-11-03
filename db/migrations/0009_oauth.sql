@@ -215,9 +215,13 @@ CREATE POLICY oauth_grants_admin_revoke ON memory.oauth_grants FOR UPDATE TO eng
 -- ── What the server calls ────────────────────────────────────────────────────
 
 -- The verified Google email behind a Supabase Auth session that started in the
--- last 15 minutes and has not ended, or NULL. The session id comes from the
--- signed-in person's token; it is never shown to them or anyone else. Internal:
--- only the functions below call it.
+-- last 15 minutes and has not ended, or NULL. The session itself must come
+-- from a Google sign-in: Supabase records it as an OAuth sign-in, and the
+-- account's Google identity signed in within a minute of the session starting.
+-- Having a Google identity is not enough, since a password or magic-link
+-- session on the same account would pass that. The session id comes from the
+-- signed-in person's token; it is never shown to them or anyone else.
+-- Internal: only the functions below call it.
 CREATE FUNCTION memory.oauth_signed_in_email(p_user_id uuid, p_session_id uuid) RETURNS text
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
 DECLARE
@@ -239,6 +243,9 @@ BEGIN
     AND NOT coalesce(u.is_anonymous, false)
     AND i.identity_data ->> 'email_verified' = 'true'
     AND coalesce(i.identity_data ->> 'email', '') <> ''
+    AND i.last_sign_in_at BETWEEN s.created_at - interval '1 minute' AND s.created_at + interval '1 minute'
+    AND EXISTS (SELECT 1 FROM auth.mfa_amr_claims c
+                WHERE c.session_id = s.id AND c.authentication_method = 'oauth')
   ORDER BY i.id
   LIMIT 1;
   RETURN v_email;
@@ -380,6 +387,10 @@ BEGIN
     RETURN QUERY SELECT 'invalid_grant'::text, NULL::text[], NULL::text, NULL::timestamptz;
     RETURN;
   END IF;
+  -- Hold the member against a revocation running at the same time: either the
+  -- revocation commits first and this sees it, or it waits and then revokes
+  -- the grant made here.
+  PERFORM 1 FROM memory.oauth_members WHERE id = v_code.member_id FOR SHARE;
   INSERT INTO memory.oauth_grants (client_id, member_id, scopes, resource)
   VALUES (v_code.client_id, v_code.member_id, v_code.scopes, v_code.resource)
   RETURNING * INTO v_grant;
@@ -421,6 +432,7 @@ BEGIN
     RETURN;
   END IF;
   SELECT * INTO v_grant FROM memory.oauth_grants WHERE id = v_token.grant_id;
+  PERFORM 1 FROM memory.oauth_members WHERE id = v_grant.member_id FOR SHARE;
   IF v_token.used_at IS NOT NULL THEN
     UPDATE memory.oauth_grants SET revoked_at = now(), revoke_reason = 'refresh_reuse'
     WHERE id = v_grant.id AND revoked_at IS NULL;

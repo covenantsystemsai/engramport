@@ -12,10 +12,13 @@ CREATE TABLE IF NOT EXISTS auth.users (
   deleted_at timestamptz, is_anonymous boolean NOT NULL DEFAULT false);
 CREATE TABLE IF NOT EXISTS auth.identities (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL, provider text NOT NULL,
-  provider_id text, identity_data jsonb NOT NULL);
+  provider_id text, identity_data jsonb NOT NULL, last_sign_in_at timestamptz);
 CREATE TABLE IF NOT EXISTS auth.sessions (
   id uuid PRIMARY KEY, user_id uuid NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
   not_after timestamptz);
+CREATE TABLE IF NOT EXISTS auth.mfa_amr_claims (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), session_id uuid NOT NULL, authentication_method text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now());
 
 \set u_ok   '00000000-0000-4000-8000-00000000a001'
 \set u_new  '00000000-0000-4000-8000-00000000a002'
@@ -25,18 +28,35 @@ CREATE TABLE IF NOT EXISTS auth.sessions (
 \set s_end  '00000000-0000-4000-8000-00000000b003'
 \set s_new  '00000000-0000-4000-8000-00000000b004'
 \set s_pw   '00000000-0000-4000-8000-00000000b005'
+\set u_both '00000000-0000-4000-8000-00000000a004'
+\set s_both_pw '00000000-0000-4000-8000-00000000b006'
+\set s_both_other '00000000-0000-4000-8000-00000000b007'
+\set s_ok_pw '00000000-0000-4000-8000-00000000b008'
 INSERT INTO auth.users (id, email) VALUES
-  (:'u_ok', 'Owner@Example.com'), (:'u_new', 'unverified@example.com'), (:'u_pw', 'owner2@example.com');
-INSERT INTO auth.identities (user_id, provider, identity_data) VALUES
-  (:'u_ok', 'google', '{"email": "Owner@Example.com", "email_verified": true}'),
-  (:'u_new', 'google', '{"email": "unverified@example.com", "email_verified": false}'),
-  (:'u_pw', 'email', '{"email": "owner2@example.com", "email_verified": true}');
+  (:'u_ok', 'Owner@Example.com'), (:'u_new', 'unverified@example.com'), (:'u_pw', 'owner2@example.com'),
+  (:'u_both', 'owner@example.com');
+-- u_both has a verified Google identity that last signed in an hour ago, and
+-- a password; its fresh sessions come from the password and from another
+-- OAuth provider, never from Google.
+INSERT INTO auth.identities (user_id, provider, identity_data, last_sign_in_at) VALUES
+  (:'u_ok', 'google', '{"email": "Owner@Example.com", "email_verified": true}', now()),
+  (:'u_new', 'google', '{"email": "unverified@example.com", "email_verified": false}', now()),
+  (:'u_pw', 'email', '{"email": "owner2@example.com", "email_verified": true}', now()),
+  (:'u_both', 'google', '{"email": "owner@example.com", "email_verified": true}', now() - interval '1 hour'),
+  (:'u_both', 'email', '{"email": "owner@example.com", "email_verified": true}', now()),
+  (:'u_both', 'github', '{"email": "owner@example.com", "email_verified": true}', now());
 INSERT INTO auth.sessions (id, user_id, created_at, not_after) VALUES
   (:'s_ok', :'u_ok', now(), NULL),
   (:'s_old', :'u_ok', now() - interval '20 minutes', NULL),
   (:'s_end', :'u_ok', now(), now() - interval '1 second'),
   (:'s_new', :'u_new', now(), NULL),
-  (:'s_pw', :'u_pw', now(), NULL);
+  (:'s_pw', :'u_pw', now(), NULL),
+  (:'s_both_pw', :'u_both', now(), NULL),
+  (:'s_both_other', :'u_both', now(), NULL),
+  (:'s_ok_pw', :'u_ok', now(), NULL);
+INSERT INTO auth.mfa_amr_claims (session_id, authentication_method) VALUES
+  (:'s_ok', 'oauth'), (:'s_old', 'oauth'), (:'s_end', 'oauth'), (:'s_new', 'oauth'), (:'s_pw', 'password'),
+  (:'s_both_pw', 'password'), (:'s_both_other', 'oauth'), (:'s_ok_pw', 'magiclink');
 
 -- Members, made by the admin role: write in cell 3, read-only in cell 2, and
 -- one for an email that only signs in with a password.
@@ -142,6 +162,12 @@ SELECT t.expect_count('an unverified Google email sees none',
   format($$SELECT 1 FROM memory.oauth_member_choices(%L, %L)$$, :'u_new', :'s_new'), 0);
 SELECT t.expect_count('a password sign-in sees none, even for a member''s email',
   format($$SELECT 1 FROM memory.oauth_member_choices(%L, %L)$$, :'u_pw', :'s_pw'), 0);
+SELECT t.expect_count('a password session sees none, though the account also has a Google identity',
+  format($$SELECT 1 FROM memory.oauth_member_choices(%L, %L)$$, :'u_both', :'s_both_pw'), 0);
+SELECT t.expect_count('nor a magic-link session started just after a Google sign-in',
+  format($$SELECT 1 FROM memory.oauth_member_choices(%L, %L)$$, :'u_ok', :'s_ok_pw'), 0);
+SELECT t.expect_count('nor a session from another OAuth provider',
+  format($$SELECT 1 FROM memory.oauth_member_choices(%L, %L)$$, :'u_both', :'s_both_other'), 0);
 SELECT t.expect_count('no session sees none',
   format($$SELECT 1 FROM memory.oauth_member_choices(%L, NULL)$$, :'u_ok'), 0);
 

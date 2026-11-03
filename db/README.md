@@ -165,6 +165,21 @@ Applying to a real project needs the owner's yes first.
   members, clients and grants, can revoke a grant, and never sees a code or a
   token.
 
+## Retracted memories' graph rows (0010)
+
+- Retracting a memory keeps its text for the record. Now the graph rows built
+  on it stop coming back too:
+  - a relation whose evidence is that memory, with its quote, from
+    `get_entity` and from the search walk;
+  - an entity the extraction job found only in retracted memories, by id, name
+    or alias, and as a seed for graph search.
+- `memory.relation_is_live` and `memory.entity_is_live` decide this, with the
+  caller's rights. An entity an agent asserted always stays. A new memory that
+  mentions a hidden entity brings it back as the same entity.
+- Nothing is deleted. A relation keeps only the first memory that evidenced
+  it, so retracting that memory hides the relation even if a later memory
+  states it again.
+
 ## Run the tests locally
 
 Needs Postgres 17 with pgvector 0.7 or later, as a database you can throw away:

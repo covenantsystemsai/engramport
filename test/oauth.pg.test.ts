@@ -7,8 +7,10 @@
  */
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import pg from "pg";
+
+import { createAuthStub, signInWithGoogle } from "./support/auth-stub.ts";
 
 const ADMIN_URL = process.env.ENGRAMPORT_TEST_DATABASE_URL;
 const sha = (s: string) => createHash("sha256").update(s).digest();
@@ -20,8 +22,8 @@ describe("oauth races", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE_UR
   const cb = "https://claude.ai/api/mcp/auth_callback";
   const resource = "https://mcp.example/mcp";
   const verifier = randomBytes(32).toString("base64url");
-  const userId = randomUUID();
-  const sessionId = randomUUID();
+  let userId: string;
+  let sessionId: string;
   let admin: pg.Pool;
   let app: pg.Pool;
   let cell: string;
@@ -30,30 +32,9 @@ describe("oauth races", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE_UR
 
   before(async () => {
     admin = new pg.Pool({ connectionString: ADMIN_URL });
-    await admin.query(`
-      CREATE SCHEMA IF NOT EXISTS auth;
-      CREATE TABLE IF NOT EXISTS auth.users (
-        id uuid PRIMARY KEY, email text, email_confirmed_at timestamptz, banned_until timestamptz,
-        deleted_at timestamptz, is_anonymous boolean NOT NULL DEFAULT false);
-      CREATE TABLE IF NOT EXISTS auth.identities (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL, provider text NOT NULL,
-        provider_id text, identity_data jsonb NOT NULL, last_sign_in_at timestamptz);
-      CREATE TABLE IF NOT EXISTS auth.sessions (
-        id uuid PRIMARY KEY, user_id uuid NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
-        not_after timestamptz);
-      CREATE TABLE IF NOT EXISTS auth.mfa_amr_claims (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(), session_id uuid NOT NULL,
-        authentication_method text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());`);
+    await createAuthStub(admin);
     await admin.query("ALTER ROLE engramport_app LOGIN PASSWORD 'engramport-test-only'");
-    const email = `race-${run}@example.com`;
-    await admin.query("INSERT INTO auth.users (id, email) VALUES ($1, $2)", [userId, email]);
-    await admin.query(
-      `INSERT INTO auth.identities (user_id, provider, identity_data, last_sign_in_at)
-       VALUES ($1, 'google', jsonb_build_object('email', $2::text, 'email_verified', true), now())`,
-      [userId, email],
-    );
-    await admin.query("INSERT INTO auth.sessions (id, user_id) VALUES ($1, $2)", [sessionId, userId]);
-    await admin.query("INSERT INTO auth.mfa_amr_claims (session_id, authentication_method) VALUES ($1, 'oauth')", [sessionId]);
+    ({ userId, sessionId } = await signInWithGoogle(admin, `race-${run}@example.com`));
     const ns = async (slug: string, level: string, parent: string | null) =>
       (await admin.query<{ id: string }>(
         "INSERT INTO memory.namespaces (parent_id, level, slug) VALUES ($1, $2, $3) RETURNING id", [parent, level, slug],

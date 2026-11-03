@@ -1,0 +1,96 @@
+// OAuth pieces that need no database: the redirect allowlist, the sealed
+// in-flight state, and the Supabase Auth client against a stand-in server.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { randomBytes, randomUUID } from "node:crypto";
+import type { AddressInfo } from "node:net";
+import express from "express";
+
+import { openState, redirectAllowed, sealState, supabaseIdentity } from "../src/oauth.ts";
+
+test("redirectAllowed: https on a listed host, or http on loopback, nothing else", () => {
+  const hosts = ["claude.ai", "claude.com"];
+  assert.ok(redirectAllowed("https://claude.ai/api/mcp/auth_callback", hosts));
+  assert.ok(redirectAllowed("https://claude.com/cb?x=1", hosts));
+  assert.ok(redirectAllowed("http://localhost:6274/oauth/callback", hosts));
+  assert.ok(redirectAllowed("http://127.0.0.1:1/cb", hosts));
+  for (const bad of [
+    "https://claude.ai.evil.test/cb", "https://evil.test/cb", "http://claude.ai/cb", "https://a:b@claude.ai/cb",
+    "https://claude.ai/cb#frag", "https://claude.ai/c b", "javascript:alert(1)", "not a url", "http://10.0.0.1/cb",
+  ]) {
+    assert.equal(redirectAllowed(bad, hosts), false, bad);
+  }
+});
+
+test("sealed state opens only with the same pepper, untouched and in time", () => {
+  const pepper = randomBytes(32);
+  const value = {
+    step: "login" as const, exp: Date.now() + 60_000, clientId: "epc_x", redirectUri: "https://claude.ai/cb",
+    challenge: "c", scopes: ["read"], idpVerifier: "v",
+  };
+  const sealed = sealState(pepper, value);
+  assert.ok(!sealed.includes("claude.ai"), "the contents are not readable");
+  assert.deepEqual(openState(pepper, sealed), value);
+  assert.equal(openState(randomBytes(32), sealed), undefined);
+  assert.equal(openState(pepper, sealed.slice(0, -3) + "AAA"), undefined);
+  assert.equal(openState(pepper, sealed, value.exp + 1), undefined);
+  assert.equal(openState(pepper, "garbage"), undefined);
+  assert.equal(openState(pepper, undefined), undefined);
+});
+
+test("supabaseIdentity: PKCE sign-in URL, code trade and sign-out against Supabase Auth's API", async () => {
+  const seen: Array<{ path: string; apikey?: string; body?: unknown; auth?: string }> = [];
+  const userId = randomUUID();
+  const sessionId = randomUUID();
+  let issuer = "";
+  let claims: Record<string, unknown> = {};
+  const app = express();
+  app.use(express.json());
+  app.post("/auth/v1/token", (req, res) => {
+    seen.push({ path: req.originalUrl, apikey: req.get("apikey"), body: req.body });
+    const jwt = ["e30", Buffer.from(JSON.stringify(claims)).toString("base64url"), "sig"].join(".");
+    res.json({ access_token: jwt, token_type: "bearer" });
+  });
+  app.post("/auth/v1/logout", (req, res) => {
+    seen.push({ path: req.originalUrl, auth: req.get("authorization") });
+    res.status(204).end();
+  });
+  const server = await new Promise<import("node:http").Server>((r) => {
+    const s = app.listen(0, "127.0.0.1", () => r(s));
+  });
+  try {
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    issuer = `${base}/auth/v1`;
+    const idp = supabaseIdentity(`${base}/`, "sb_publishable_test");
+
+    const url = new URL(idp.signInUrl("CHALLENGE", "https://mcp.example.com/oauth/callback"));
+    assert.equal(url.pathname, "/auth/v1/authorize");
+    assert.equal(url.searchParams.get("provider"), "google");
+    assert.equal(url.searchParams.get("code_challenge"), "CHALLENGE");
+    assert.equal(url.searchParams.get("code_challenge_method"), "s256");
+    assert.equal(url.searchParams.get("redirect_to"), "https://mcp.example.com/oauth/callback");
+
+    claims = { iss: issuer, sub: userId, session_id: sessionId };
+    const who = await idp.exchange("the-code", "the-verifier");
+    assert.equal(who.userId, userId);
+    assert.equal(who.sessionId, sessionId);
+    assert.deepEqual(seen[0], {
+      path: "/auth/v1/token?grant_type=pkce", apikey: "sb_publishable_test",
+      body: { auth_code: "the-code", code_verifier: "the-verifier" },
+    });
+
+    for (const wrong of [
+      { iss: "https://other.supabase.co/auth/v1", sub: userId, session_id: sessionId },
+      { iss: issuer, sub: "not-a-uuid", session_id: sessionId },
+      { iss: issuer, sub: userId },
+    ]) {
+      claims = wrong;
+      await assert.rejects(idp.exchange("c", "v"), /unexpected session/);
+    }
+
+    await idp.signOut(who.accessToken);
+    assert.deepEqual(seen.at(-1), { path: "/auth/v1/logout?scope=local", auth: `Bearer ${who.accessToken}` });
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});

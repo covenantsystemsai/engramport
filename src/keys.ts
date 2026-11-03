@@ -48,7 +48,8 @@ export function decodePepper(text: string): Buffer | undefined {
   return buf.length >= MIN_PEPPER_BYTES ? buf : undefined;
 }
 
-function randomBase62(n: number): string {
+/** n random base62 characters, each equally likely. */
+export function randomBase62(n: number): string {
   // Rejection sampling keeps every character equally likely.
   let out = "";
   while (out.length < n) {

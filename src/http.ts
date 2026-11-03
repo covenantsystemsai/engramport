@@ -12,9 +12,15 @@
  * bots). That key is what reaches the backend, so a caller can only reach what
  * its own key can reach. A missing or malformed key gets a 401 before any tool
  * runs. The server's own ENGRAMPORT_API_KEY is never used in this mode.
+ *
+ * With OAuth on (src/oauth.ts), the discovery and sign-in routes are served
+ * before that check, a 401 names the resource metadata so clients know where
+ * to sign in, and every key is checked against the store up front, so an
+ * expired access token gets a 401 (and the client refreshes) instead of a
+ * tool error.
  */
 
-import express, { Request, Response } from "express";
+import express, { Request, Response, Router } from "express";
 import cors from "cors";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
@@ -25,6 +31,12 @@ export interface HttpAppOptions {
   apiUrl: string;
   namespace: string;
   deps?: McpDeps;
+  /** OAuth routes (createOAuthRouter), served without a key. */
+  oauth?: Router;
+  /** RFC 9728 metadata URL named in every 401, so clients can start sign-in. */
+  resourceMetadataUrl?: string;
+  /** Checks a key before any route runs: false means unknown, revoked or expired. */
+  authenticate?: (key: string) => Promise<boolean>;
 }
 
 export function createHttpApp(opts: HttpAppOptions): express.Express {
@@ -32,7 +44,9 @@ export function createHttpApp(opts: HttpAppOptions): express.Express {
   const { toolDefinitions, executeTool } = deps;
 
   const app = express();
-  app.use(cors({ exposedHeaders: ["Mcp-Session-Id"] }));
+  // One proxy hop (Cloud Run's front end) sets the client address used by rate limits.
+  app.set("trust proxy", 1);
+  app.use(cors({ exposedHeaders: ["Mcp-Session-Id", "WWW-Authenticate"] }));
   app.use(express.json({ limit: "10mb" }));
 
   // Health stays open for uptime checks, so it says nothing about the backend
@@ -41,22 +55,46 @@ export function createHttpApp(opts: HttpAppOptions): express.Express {
     res.json({ service: "engramport", version: VERSION, status: "ok" });
   });
 
+  if (opts.oauth) app.use(opts.oauth);
+
+  const challenge = (error?: string) =>
+    [
+      'Bearer realm="engramport"',
+      ...(opts.resourceMetadataUrl ? [`resource_metadata="${opts.resourceMetadataUrl}"`] : []),
+      ...(error ? [`error="${error}"`] : []),
+    ].join(", ");
+  const unauthorized = (res: Response, message: string, error?: string) => {
+    res.status(401).set("WWW-Authenticate", challenge(error)).json({
+      jsonrpc: "2.0",
+      error: { code: -32001, message },
+      id: null,
+    });
+  };
+
   // Everything below needs a caller key. The key is bound to this request's
   // async context and forwarded to the backend in place of any server key.
   app.use((req: Request, res: Response, next) => {
     const apiKey = keyFromHeaders(req.headers);
     if (!apiKey) {
-      res
-        .status(401)
-        .set("WWW-Authenticate", 'Bearer realm="engramport"')
-        .json({
-          jsonrpc: "2.0",
-          error: { code: -32001, message: "Unauthorized: send your EngramPort key as Authorization: Bearer <key>" },
-          id: null,
-        });
+      unauthorized(res, "Unauthorized: send your EngramPort key as Authorization: Bearer <key>");
       return;
     }
-    runAsCaller({ apiKey }, next);
+    if (!opts.authenticate) {
+      runAsCaller({ apiKey }, next);
+      return;
+    }
+    opts.authenticate(apiKey).then(
+      (ok) => {
+        if (ok) runAsCaller({ apiKey }, next);
+        else unauthorized(res, "Unauthorized: this key is unknown, revoked or expired", "invalid_token");
+      },
+      (err) => {
+        // A store outage is not the caller's fault: a 401 here would make
+        // clients throw away good tokens.
+        console.error("[engramport] key check failed:", (err as Error).message);
+        res.status(503).json({ jsonrpc: "2.0", error: { code: -32603, message: "Temporarily unavailable" }, id: null });
+      },
+    );
   });
 
   // List tools

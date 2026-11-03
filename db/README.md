@@ -138,7 +138,8 @@ Applying to a real project needs the owner's yes first.
 ## OAuth sign-in (0009)
 
 - The database half of OAuth 2.1 for claude.ai and other MCP clients. The
-  HTTP endpoints come in a later change.
+  HTTP side is `src/oauth.ts` (see the README); it only carries values
+  between the browser and these functions.
 - `oauth_members`: a verified Google email that may connect to one
   namespace, as one actor, with read or read+write scopes. The admin role adds
   and revokes members; revoking one ends every grant made through it.

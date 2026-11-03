@@ -146,3 +146,39 @@ test("concurrent callers each run under their own key", async () => {
     assert.equal(call?.key, key);
   }
 });
+
+test("with a key check: an unknown key gets 401 invalid_token, a store outage 503, and neither runs a tool", async () => {
+  let outage = false;
+  const app = createHttpApp({
+    apiUrl: "http://stub", namespace: "test", deps,
+    resourceMetadataUrl: "https://mcp.example.com/.well-known/oauth-protected-resource/mcp",
+    authenticate: async (key) => {
+      if (outage) throw new Error("db down");
+      return key === KEY;
+    },
+  });
+  const s: HttpServer = await new Promise((resolve) => {
+    const x = app.listen(0, "127.0.0.1", () => resolve(x));
+  });
+  try {
+    const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/remember`;
+    const post = (key: string) => fetch(url, {
+      method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: "{}",
+    });
+    const before = calls.length;
+    const bad = await post("ek_not_known");
+    assert.equal(bad.status, 401);
+    assert.equal(
+      bad.headers.get("www-authenticate"),
+      'Bearer realm="engramport", resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token"',
+    );
+    outage = true;
+    assert.equal((await post(KEY)).status, 503);
+    assert.equal(calls.length, before);
+    outage = false;
+    assert.equal((await post(KEY)).status, 200);
+    assert.equal(calls.at(-1)?.key, KEY);
+  } finally {
+    await new Promise<void>((r) => s.close(() => r()));
+  }
+});

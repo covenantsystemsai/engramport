@@ -328,6 +328,10 @@ describe("postgres store", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
     }
     const bad = await executeStoreTool("remember", { content: "x", claim_type: "verified_fact" }, store, keys.cell1);
     assert.equal(JSON.parse(bad.content[0].text).code, "invalid");
+    for (const expected_version of ["", "  ", 42, {}]) {
+      const r = await executeStoreTool("remember", { content: "x", dedup_key: "office-hours", expected_version }, store, keys.cell1);
+      assert.equal(JSON.parse(r.content[0].text).code, "invalid", JSON.stringify(expected_version));
+    }
     const good = await executeStoreTool("remember", { content: "Vendor said the parts ship Monday", claim_type: "inference" }, store, keys.cell1);
     assert.equal(JSON.parse(good.content[0].text).claim_type, "inference");
   });

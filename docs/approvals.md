@@ -187,7 +187,11 @@ truncation by any role. Local verification on that revision: database suite
 typecheck clean. It needs a fresh review on its new head, and is held until
 PR 41 merges before it is retargeted to main.
 
-**Merge decisions.** PR 41 is not merged yet: the review found issues, so the
-fixes go back to the founder before the merge. PR 42 stays open. Neither
-migration is applied to the live project, no owner is provisioned and no live
-authority is granted.
+**Merge decisions.** The review found issues on PR 41's first version, so the
+fixes went back to the founder before any merge. On the founder's yes, PR 41
+was merged at its verified head `2107f91` (all checks green, no open findings)
+as `038c206` on main. PR 42 was then retargeted to main and stays open for its
+own review and decision. Neither migration is applied to the live project, no
+owner is provisioned and no live authority is granted. Still open for the
+founder: whether a new approver must accept a grant with their own sign-in, and
+tying each sign-in to one named act on the approval page.

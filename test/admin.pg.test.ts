@@ -406,6 +406,80 @@ describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABA
     assert.equal(await runAdmin(["member", "revoke", email, "--namespace", cell], open, io), 1);
   });
 
+  test("approval authority goes to humans only, in the scope its namespace allows", async () => {
+    const owner = `owner-${run}`;
+    await admin.createActor(owner, "human", "Pilot owner");
+    await admin.createActor(`bot-${run}`, "agent", "An agent");
+    const a = await admin.grantAuthority({ actor: owner, namespace: cell, scope: "cell_knowledge", canDelegate: true });
+    assert.deepEqual([a.actor, a.namespace, a.scope, a.claim_types, a.can_delegate, a.parent_id, a.valid],
+      [owner, cell, "cell_knowledge", null, true, null, true]);
+    const narrow = await admin.grantAuthority({
+      actor: owner, namespace: cell, scope: "cell_knowledge", claimTypes: ["decision", "fact", "fact"], expiresInMs: 86_400_000,
+    });
+    assert.deepEqual(narrow.claim_types, ["decision", "fact"]);
+    assert.ok(narrow.expires_at && narrow.expires_at.getTime() > Date.now());
+
+    await refused(admin.grantAuthority({ actor: `bot-${run}`, namespace: cell, scope: "cell_knowledge" }), /not a human actor/);
+    await refused(admin.grantAuthority({ actor: owner, namespace: `${city}/tower`, scope: "cell_knowledge" }), /client cell/);
+    await refused(admin.grantAuthority({ actor: owner, namespace: cell, scope: "company_governance" }), /company namespace/);
+    await refused(admin.grantAuthority({ actor: owner, namespace: cell, scope: "promotion" }), /tower or a city/);
+    await refused(admin.grantAuthority({ actor: owner, namespace: cell, scope: "deploy" }), /not an approval scope/);
+    await refused(admin.grantAuthority({ actor: owner, namespace: cell, scope: "cell_knowledge", claimTypes: ["approved"] }), /not a claim type/);
+    await refused(admin.grantAuthority({ actor: owner, namespace: cell, scope: "cell_knowledge", claimTypes: [] }), /at least one/);
+    await refused(admin.grantAuthority({ actor: owner, namespace: cell, scope: "cell_knowledge", expiresInMs: 0 }), /future/);
+    await refused(admin.grantAuthority({ actor: "nobody-here", namespace: cell, scope: "cell_knowledge" }), /no actor/);
+    const promo = await admin.grantAuthority({ actor: owner, namespace: `${city}/tower`, scope: "promotion" });
+    assert.equal(promo.scope, "promotion");
+
+    const listed = await admin.listAuthorities({ namespace: city, actor: owner });
+    assert.deepEqual(listed.map((r) => r.id).sort(), [a.id, narrow.id, promo.id].sort());
+
+    await refused(admin.revokeAuthority(a.id, "  "), /reason/);
+    await refused(admin.revokeAuthority(a.id, "Paused by the owner"), /short code/);
+    await refused(admin.revokeAuthority("not-a-uuid", "gone_now"), /not an authority id/);
+    await refused(admin.revokeAuthority("00000000-0000-0000-0000-000000000000", "gone_now"), /no authority/);
+    const gone = await admin.revokeAuthority(a.id, "pilot_paused");
+    assert.deepEqual([gone.revoke_reason, gone.valid], ["pilot_paused", false]);
+    await refused(admin.revokeAuthority(a.id, "again_now"), /already revoked/);
+    assert.ok(!(await admin.listAuthorities({ actor: owner })).some((r) => r.id === a.id));
+    assert.ok((await admin.listAuthorities({ actor: owner, includeRevoked: true })).some((r) => r.id === a.id));
+
+    // Disabling the holder makes the authority invalid without revoking it.
+    await admin.setActorDisabled(owner, true);
+    try {
+      const [still] = (await admin.listAuthorities({ actor: owner })).filter((r) => r.id === narrow.id);
+      assert.deepEqual([still.revoked_at, still.valid], [null, false]);
+    } finally {
+      await admin.setActorDisabled(owner, false);
+    }
+  });
+
+  test("the authority commands grant, list and revoke, and print no memory content", async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const io = { out: (l: string) => out.push(l), err: (l: string) => err.push(l) };
+    const open = () => new AdminClient(new pg.Pool({ connectionString: urlAs(opsRole, "ops-test-only") }), pepper);
+    const holder = `holder-${run}`;
+    await admin.createActor(holder, "human", "Another owner");
+    assert.equal(await runAdmin(["authority", "grant", holder, "--namespace", cell, "--scope", "cell_knowledge",
+      "--claim-types", "decision,fact", "--can-delegate", "--expires-in", "30d"], open, io), 0, err.join("\n"));
+    const line = out.at(-1)!;
+    assert.match(line, new RegExp(`^[0-9a-f-]{36}  ${holder} may approve decision, fact in ${cell} \\(cell_knowledge\\), and may delegate, until `));
+    const id = line.slice(0, 36);
+    out.length = 0;
+    assert.equal(await runAdmin(["authority", "list", "--actor", holder], open, io), 0);
+    assert.equal(out.length, 1);
+    assert.match(out[0], /granted by admin  valid$/);
+    assert.equal(await runAdmin(["authority", "grant", holder, "--namespace", cell], open, io), 2);
+    assert.equal(await runAdmin(["authority", "revoke", id], open, io), 2);
+    out.length = 0;
+    assert.equal(await runAdmin(["authority", "revoke", id, "--reason", "owner_left"], open, io), 0);
+    assert.match(out[0], /can no longer approve/);
+    out.length = 0;
+    assert.equal(await runAdmin(["authority", "list", "--actor", holder, "--all"], open, io), 0);
+    assert.match(out[0], /revoked .* \(owner_left\)$/);
+  });
+
   test("the command line prints a minted key alone on stdout", async () => {
     const out: string[] = [];
     const err: string[] = [];

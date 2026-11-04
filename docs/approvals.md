@@ -17,8 +17,14 @@ a memory, a field or a tool argument that a writer sets. So:
   database checks against Supabase Auth itself (`memory.oauth_signed_in_email`
   from 0009): signed in with Google, within the last 15 minutes, on an email that
   maps to exactly one enabled human actor through an unrevoked membership.
-- Each sign-in is used **once**, then recorded as spent. A second approval or
-  delegation needs a new sign-in, so an earlier sign-in can't be replayed.
+- Each sign-in does **one** authority act (approve, delegate or revoke), then
+  is recorded as spent. A second act needs a new sign-in. A sign-in used to
+  connect a client (the OAuth flow) is spent for authority acts too, and one
+  already spent on an authority act can't connect a client. The sign-in is
+  recorded by a hash of its session id, never the id itself.
+- A person is **one email**. If a second email can sign in as the same actor
+  (an assistant added to connect as the owner, say), that actor can't use any
+  authority until one of the two memberships is revoked.
 - No function takes an API key or an OAuth access token as proof of a person.
   An agent that holds a person's MCP connection can read and write as that
   person, but it cannot approve: approving is not an MCP tool.
@@ -52,7 +58,11 @@ a memory, a field or a tool argument that a writer sets. So:
 - `memory.delegate_approval_authority` and `memory.revoke_delegated_authority`:
   what the server calls for an owner, each with the owner's own fresh sign-in.
 - The admin role grants and revokes top-level authority and lists it. It can't
-  write a delegation, and nothing here shows it memory content.
+  write, revoke or otherwise touch a delegation, it can't say a revocation came
+  from a grantor, and a revocation is stamped with the moment it happens, so it
+  can't be backdated. Nothing here shows it memory content.
+- No role deletes or truncates the authority table or the spent sign-ins, the
+  table owner included.
 - Admin commands:
 
   ```
@@ -88,3 +98,44 @@ can be approved, because no one there holds authority yet.
 The founder's own `company_governance` authority, on the company namespace, is
 provisioned the same way and is also left for its own yes. So is any
 `promotion` authority on a tower or city.
+
+## Review and verification record
+
+**PR 41, independent security review (reviewed head `bba4e24`).** The review
+covered approval authority, delegation chains, Google sign-in binding,
+namespace scope and revocation. It found two medium and three low issues,
+which were fixed on the PR before any merge, and two design points that stay
+open for the founder.
+
+| # | Finding | Severity | Outcome |
+|---|---------|----------|---------|
+| M1 | The admin role could revoke a delegation, mark a revocation as the grantor's, and backdate a revocation | Medium | Fixed. The admin policy covers top-level rows only; only a delegation may carry `revoked_by_grantor`; `revoked_at` is set to the time of the change |
+| M2 | A sign-in used to connect a client could then be used once more for an authority act | Medium | Fixed. Connecting records the sign-in as spent for authority acts, and a sign-in spent on an authority act can't connect |
+| L3 | Two emails mapped to one human actor could each act as that person | Low | Fixed. An actor reachable from more than one email can't use authority |
+| L4 | A claim type list could hold a blank, or be empty | Low | Fixed by a check on the column |
+| L5 | The table owner could delete or truncate authority and sign-in records | Low | Fixed. Delete and truncate are refused for every role |
+| L6 | A sign-in isn't tied to the act it was taken for, and a refused act doesn't spend it | Low | Open, by design for now. Any act still needs the holder's own fresh Google sign-in and valid authority. The approval page should take one sign-in for one named act |
+| I7 | The admin role can create a human actor, give it a membership and grant it authority, so the admin can make an approver | Info | Open, founder decision. Options: a second person confirms each top-level grant, or the grantee accepts it with their own sign-in |
+
+Tests added for each fix: the admin can't revoke, relabel or backdate a
+delegation's revocation; a revoked authority stays revoked for every role;
+delete and truncate are refused; blank or empty claim type lists are refused;
+a connect sign-in can't delegate and a spent sign-in can't connect; two emails
+on one actor are refused; a spent revoke sign-in can't revoke again; an expired
+authority is not valid; a fresh password sign-in and a mismatched user and
+session are refused; and the API roles and the server hold no direct rights on
+these tables. The non-delegable test now uses the holder's own sign-in, so it
+tests the flag and not the holder check.
+
+Local verification on the fixed revision: database suite 436 checks passed,
+unit tests 76 passed, store and database tests 88 passed, typecheck clean. The
+commit, check runs and second review of the fixed head are recorded on PR 41.
+
+**PR 42 (0016).** Codex reviewed head `8ef38ec` and raised no findings. PR 42
+is held until PR 41 merges; it then takes PR 41's fixes, is verified again, and
+is reviewed again on its new head before it is retargeted to main.
+
+**Merge decisions.** PR 41 is not merged yet: the review found issues, so the
+fixes go back to the founder before the merge. PR 42 stays open. Neither
+migration is applied to the live project, no owner is provisioned and no live
+authority is granted.

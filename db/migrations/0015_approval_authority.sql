@@ -12,6 +12,12 @@
 --     counts: no function here takes a key as proof of a person.
 --   * Each sign-in is used once. A second approval or delegation needs a new
 --     sign-in, so nothing that was signed in for earlier can be replayed later.
+--     A sign-in used to connect a client such as claude.ai is spent for
+--     authority too, and the other way round: connecting hands a token to an
+--     agent, so that same sign-in never also counts as a person approving.
+--   * A person is the one Google email bound to a human actor. If more than one
+--     email can sign in as that actor (say an assistant added to connect as the
+--     owner), nobody can use the actor's authority until that is undone.
 --   * Scopes are kept apart:
 --       cell_knowledge      a client cell's owner approves business knowledge
 --                           and requirements in that one cell.
@@ -22,8 +28,10 @@
 --                           usable to approve an ordinary memory.
 --     None of these is an engineering, security, financial or deployment
 --     approval. EngramPort records memory approvals and nothing else.
---   * The admin role grants and revokes top-level authority. It is managing who
---     may approve, and still reads no memory content.
+--   * The admin role grants and revokes top-level authority, and nothing else:
+--     it cannot touch a delegation, and a revocation is stamped with the time
+--     it happens. It is managing who may approve, and still reads no memory
+--     content.
 --   * An owner may delegate part of their authority, once, through an explicit
 --     grant: the same namespace and scope, the same or fewer claim types, no
 --     later expiry, and no further delegation.
@@ -32,6 +40,7 @@
 --     revoking an owner's authority ends every delegation made from it, and
 --     nothing approved with it from then on can go through.
 --   * Rows are never deleted or edited, only revoked, so the trail stays whole.
+--     That holds for every role, the table owner included.
 
 CREATE TYPE memory.approval_scope AS ENUM ('cell_knowledge', 'company_governance', 'promotion');
 
@@ -41,7 +50,8 @@ CREATE TABLE memory.approval_authorities (
   namespace_id uuid NOT NULL REFERENCES memory.namespaces(id),
   scope memory.approval_scope NOT NULL,
   -- NULL covers every claim type.
-  claim_types memory.claim_type[] CHECK (claim_types IS NULL OR cardinality(claim_types) > 0),
+  claim_types memory.claim_type[] CHECK (claim_types IS NULL
+                                         OR (cardinality(claim_types) > 0 AND array_position(claim_types, NULL) IS NULL)),
   can_delegate boolean NOT NULL DEFAULT false,
   -- Set on a delegated authority only; a top-level one is granted by the admin role.
   parent_id uuid REFERENCES memory.approval_authorities(id),
@@ -80,6 +90,15 @@ BEGIN
     END IF;
     IF OLD.revoked_at IS NOT NULL AND (NEW.revoked_at, NEW.revoke_reason) IS DISTINCT FROM (OLD.revoked_at, OLD.revoke_reason) THEN
       RAISE EXCEPTION 'a revoked approval authority stays revoked' USING ERRCODE = '42501';
+    END IF;
+    IF OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL THEN
+      -- Only the grantor's own revocation, through revoke_delegated_authority,
+      -- may say so, and only on a delegation.
+      IF (NEW.revoke_reason = 'revoked_by_grantor') <> (OLD.parent_id IS NOT NULL) THEN
+        RAISE EXCEPTION 'a delegation is revoked by its grantor, and only a delegation says so' USING ERRCODE = '42501';
+      END IF;
+      -- A revocation happens now: it is never backdated or set ahead.
+      NEW.revoked_at := now();
     END IF;
     RETURN NEW;
   END IF;
@@ -144,17 +163,33 @@ $$;
 CREATE TRIGGER approval_authorities_shape BEFORE INSERT OR UPDATE ON memory.approval_authorities
   FOR EACH ROW EXECUTE FUNCTION memory.approval_authorities_shape();
 
+-- The record is kept whole: no role deletes or truncates it, the owner included.
+CREATE FUNCTION memory.approval_record_kept() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog AS $$
+BEGIN
+  RAISE EXCEPTION '% is a record and is never deleted', TG_TABLE_NAME USING ERRCODE = '42501';
+END
+$$;
+CREATE TRIGGER approval_authorities_kept BEFORE DELETE ON memory.approval_authorities
+  FOR EACH ROW EXECUTE FUNCTION memory.approval_record_kept();
+CREATE TRIGGER approval_authorities_kept_all BEFORE TRUNCATE ON memory.approval_authorities
+  FOR EACH STATEMENT EXECUTE FUNCTION memory.approval_record_kept();
+
 -- ── One sign-in, one act ────────────────────────────────────────────────────
 
--- Supabase sessions already used to approve, delegate or revoke. Only a hash
--- of the session id is kept.
+-- Supabase sessions already used: to approve, delegate or revoke, or to
+-- connect a client. Only a hash of the session id is kept.
 CREATE TABLE memory.human_sign_ins_used (
   session_hash bytea PRIMARY KEY CHECK (octet_length(session_hash) = 32),
   actor_id uuid NOT NULL REFERENCES memory.actors(id),
-  purpose text NOT NULL CHECK (purpose IN ('approve', 'delegate', 'revoke')),
+  purpose text NOT NULL CHECK (purpose IN ('approve', 'delegate', 'revoke', 'connect')),
   used_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX human_sign_ins_used_actor ON memory.human_sign_ins_used (actor_id);
+CREATE TRIGGER human_sign_ins_used_kept BEFORE UPDATE OR DELETE ON memory.human_sign_ins_used
+  FOR EACH ROW EXECUTE FUNCTION memory.approval_record_kept();
+CREATE TRIGGER human_sign_ins_used_kept_all BEFORE TRUNCATE ON memory.human_sign_ins_used
+  FOR EACH STATEMENT EXECUTE FUNCTION memory.approval_record_kept();
 
 -- The human actor behind a fresh Google sign-in, used up by this call. The
 -- email must belong to exactly one enabled human actor through an unrevoked
@@ -176,6 +211,13 @@ BEGIN
   IF coalesce(cardinality(v_actors), 0) <> 1 THEN
     RAISE EXCEPTION 'this sign-in is not one enabled person' USING ERRCODE = '42501';
   END IF;
+  -- A person is one email. An actor that another email can also sign in as
+  -- (an assistant added to connect as the owner, say) acts for no one.
+  IF (SELECT count(DISTINCT m.email) FROM memory.oauth_members m
+      WHERE m.actor_id = v_actors[1] AND m.revoked_at IS NULL) <> 1 THEN
+    RAISE EXCEPTION 'more than one email can sign in as this person; give each person their own actor'
+      USING ERRCODE = '42501';
+  END IF;
   BEGIN
     INSERT INTO memory.human_sign_ins_used (session_hash, actor_id, purpose)
     VALUES (sha256(uuid_send(p_session_id)), v_actors[1], p_purpose);
@@ -185,6 +227,50 @@ BEGIN
   RETURN v_actors[1];
 END
 $$;
+
+-- Connecting a client spends the sign-in for authority acts, and a sign-in
+-- already spent on one cannot connect. 0009's body is unchanged apart from the
+-- two marked lines. One sign-in may still connect several clients.
+CREATE OR REPLACE FUNCTION memory.oauth_issue_code(
+  p_user_id uuid, p_session_id uuid, p_client_id text, p_member_id uuid, p_redirect_uri text,
+  p_code_challenge text, p_resource text, p_scopes text[], p_code_hash bytea
+) RETURNS boolean
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog AS $$
+DECLARE
+  v_client uuid;
+  v_member memory.oauth_members;
+  v_email text := memory.oauth_signed_in_email(p_user_id, p_session_id);
+BEGIN
+  IF v_email IS NULL THEN
+    RETURN false;
+  END IF;
+  SELECT c.id INTO v_client FROM memory.oauth_clients c
+  WHERE c.client_id = p_client_id AND p_redirect_uri = ANY (c.redirect_uris);
+  IF v_client IS NULL THEN
+    RETURN false;
+  END IF;
+  SELECT m.* INTO v_member FROM memory.oauth_members m JOIN memory.actors a ON a.id = m.actor_id
+  WHERE m.id = p_member_id AND m.revoked_at IS NULL AND a.disabled_at IS NULL AND m.email = v_email;
+  IF v_member.id IS NULL OR p_scopes IS NULL OR NOT (p_scopes <@ v_member.scopes) THEN
+    RETURN false;
+  END IF;
+  -- (0015) not a sign-in already spent on an authority act; mark it as a connect.
+  IF EXISTS (SELECT 1 FROM memory.human_sign_ins_used u
+             WHERE u.session_hash = sha256(uuid_send(p_session_id)) AND u.purpose <> 'connect') THEN
+    RETURN false;
+  END IF;
+  INSERT INTO memory.human_sign_ins_used (session_hash, actor_id, purpose)
+  VALUES (sha256(uuid_send(p_session_id)), v_member.actor_id, 'connect')
+  ON CONFLICT (session_hash) DO NOTHING;
+  INSERT INTO memory.oauth_codes (code_hash, client_id, member_id, redirect_uri, code_challenge, resource, scopes, expires_at)
+  VALUES (p_code_hash, v_client, v_member.id, p_redirect_uri, p_code_challenge, p_resource, p_scopes,
+          now() + interval '5 minutes');
+  RETURN true;
+END
+$$;
+REVOKE ALL ON FUNCTION memory.oauth_issue_code(uuid, uuid, text, uuid, text, text, text, text[], bytea) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION memory.oauth_issue_code(uuid, uuid, text, uuid, text, text, text, text[], bytea)
+  TO engramport_app;
 
 -- ── Delegation and revocation by a holder ───────────────────────────────────
 
@@ -242,7 +328,8 @@ ALTER TABLE memory.human_sign_ins_used ENABLE ROW LEVEL SECURITY;
 ALTER TABLE memory.human_sign_ins_used FORCE ROW LEVEL SECURITY;
 
 -- The admin role grants and revokes top-level authority and reads the list.
--- It cannot write a delegation: parent_id and granted_by_actor_id aren't granted.
+-- It cannot write a delegation (parent_id and granted_by_actor_id aren't
+-- granted), and cannot revoke one either: only its grantor does that.
 GRANT SELECT ON memory.approval_authorities TO engramport_admin;
 GRANT INSERT (actor_id, namespace_id, scope, claim_types, can_delegate, expires_at)
   ON memory.approval_authorities TO engramport_admin;
@@ -252,11 +339,12 @@ CREATE POLICY approval_authorities_admin_read ON memory.approval_authorities FOR
 CREATE POLICY approval_authorities_admin_grant ON memory.approval_authorities FOR INSERT TO engramport_admin
   WITH CHECK (parent_id IS NULL);
 CREATE POLICY approval_authorities_admin_revoke ON memory.approval_authorities FOR UPDATE TO engramport_admin
-  USING (true) WITH CHECK (true);
+  USING (parent_id IS NULL AND revoked_at IS NULL) WITH CHECK (parent_id IS NULL AND revoked_at IS NOT NULL);
 
 -- The server reaches authority only through these functions, with a person's
 -- fresh sign-in. It never reads or writes the tables directly.
 REVOKE ALL ON FUNCTION memory.approval_authorities_shape() FROM PUBLIC;
+REVOKE ALL ON FUNCTION memory.approval_record_kept() FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.approval_authority_valid(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.consume_human_sign_in(uuid, uuid, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.delegate_approval_authority(uuid, uuid, uuid, uuid, memory.claim_type[], timestamptz) FROM PUBLIC;

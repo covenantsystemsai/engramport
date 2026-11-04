@@ -68,9 +68,20 @@ SELECT t.expect_denied('an authority cannot be widened in place',
   format($$UPDATE memory.approval_authorities SET claim_types = NULL WHERE id = %L$$, :'a_other'));
 SELECT t.expect_denied('or moved to another namespace',
   format($$UPDATE memory.approval_authorities SET namespace_id = %L WHERE id = %L$$, :'c1', :'a_other'));
+SELECT t.expect_denied('a claim type list cannot hold a blank',
+  format($$INSERT INTO memory.approval_authorities (actor_id, namespace_id, scope, claim_types)
+           VALUES (%L, %L, 'cell_knowledge', ARRAY['decision', NULL]::memory.claim_type[])$$, :'owner', :'c1'));
+SELECT t.expect_denied('or be empty',
+  format($$INSERT INTO memory.approval_authorities (actor_id, namespace_id, scope, claim_types)
+           VALUES (%L, %L, 'cell_knowledge', '{}')$$, :'owner', :'c1'));
+SELECT t.expect_denied('the admin role cannot delete an authority',
+  format($$DELETE FROM memory.approval_authorities WHERE id = %L$$, :'a_other'));
 RESET ROLE;
 SELECT t.expect_denied('not even by the table owner',
   format($$UPDATE memory.approval_authorities SET claim_types = NULL WHERE id = %L$$, :'a_other'));
+SELECT t.expect_denied('the table owner cannot delete an authority either',
+  format($$DELETE FROM memory.approval_authorities WHERE id = %L$$, :'a_other'));
+SELECT t.expect_denied('or empty the table', 'TRUNCATE memory.approval_authorities CASCADE');
 SET ROLE engramport_admin;
 SELECT t.expect_count('the admin role can check an authority',
   format($$SELECT 1 WHERE memory.approval_authority_valid(%L)$$, :'a_owner'), 1);
@@ -93,6 +104,7 @@ SELECT * FROM t.sign_in('owner@client.test') \gset own3_
 SELECT * FROM t.sign_in('owner@client.test') \gset own4_
 SELECT * FROM t.sign_in('helper@client.test') \gset help_
 SELECT * FROM t.sign_in('agent@client.test') \gset bot_
+SELECT * FROM t.sign_in('other@client.test') \gset oth0_
 SET ROLE engramport_app;
 SELECT memory.delegate_approval_authority(:'own1_user_id', :'own1_session_id', :'a_owner', :'helper',
   '{observation,fact}', now() + interval '30 days') AS a_helper \gset
@@ -108,8 +120,10 @@ SELECT t.expect_denied('a sign-in that maps to an agent is no person',
   format($$SELECT memory.delegate_approval_authority(%L, %L, %L, %L)$$, :'bot_user_id', :'bot_session_id', :'a_owner', :'helper'));
 SELECT t.expect_denied('a delegation cannot be delegated again',
   format($$SELECT memory.delegate_approval_authority(%L, %L, %L, %L)$$, :'help_user_id', :'help_session_id', :'a_helper', :'other'));
-SELECT t.expect_denied('an authority marked not delegable cannot be delegated',
-  format($$SELECT memory.delegate_approval_authority(%L, %L, %L, %L)$$, :'own3_user_id', :'own3_session_id', :'a_other', :'helper'));
+SELECT t.expect_denied('an authority marked not delegable cannot be delegated, even by its holder',
+  format($$SELECT memory.delegate_approval_authority(%L, %L, %L, %L)$$, :'oth0_user_id', :'oth0_session_id', :'a_other', :'helper'));
+SELECT t.expect_denied('a user id with someone else''s session is no sign-in',
+  format($$SELECT memory.delegate_approval_authority(%L, %L, %L, %L)$$, :'own3_user_id', :'help_session_id', :'a_owner', :'helper'));
 RESET ROLE;
 SELECT t.expect_count('the delegation keeps namespace and scope, narrows claim types, cannot delegate',
   format($$SELECT 1 FROM memory.approval_authorities WHERE id = %L AND parent_id = %L AND granted_by_actor_id = %L
@@ -118,6 +132,45 @@ SELECT t.expect_count('the delegation keeps namespace and scope, narrows claim t
 SELECT t.expect_count('every used sign-in is recorded once, by hash',
   format($$SELECT 1 FROM memory.human_sign_ins_used WHERE session_hash = sha256(uuid_send(%L::uuid)) AND purpose = 'delegate'$$,
          :'own1_session_id'), 1);
+
+\echo '-- a sign-in used to connect a client cannot also delegate, and the reverse'
+SELECT id AS owner_member FROM memory.oauth_members WHERE email = 'owner@client.test' \gset
+SET ROLE engramport_app;
+SELECT t.expect_count('the owner connects a client with a sign-in',
+  format($$SELECT 1 WHERE memory.oauth_issue_code(%L, %L, 'epc_aaaaaaaaaaaaaaaaaaaaaaaa', %L, 'https://claude.ai/api/mcp/auth_callback',
+           'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM', 'https://mcp.example/mcp', '{read}', sha256('authority-connect-1'))$$,
+         :'own3_user_id', :'own3_session_id', :'owner_member'), 1);
+SELECT t.expect_count('and that sign-in may connect another client',
+  format($$SELECT 1 WHERE memory.oauth_issue_code(%L, %L, 'epc_aaaaaaaaaaaaaaaaaaaaaaaa', %L, 'https://claude.ai/api/mcp/auth_callback',
+           'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM', 'https://mcp.example/mcp', '{read}', sha256('authority-connect-2'))$$,
+         :'own3_user_id', :'own3_session_id', :'owner_member'), 1);
+SELECT t.expect_denied('but it cannot delegate',
+  format($$SELECT memory.delegate_approval_authority(%L, %L, %L, %L)$$, :'own3_user_id', :'own3_session_id', :'a_owner', :'helper'));
+SELECT t.expect_count('and a sign-in spent on a delegation cannot connect a client',
+  format($$SELECT 1 WHERE memory.oauth_issue_code(%L, %L, 'epc_aaaaaaaaaaaaaaaaaaaaaaaa', %L, 'https://claude.ai/api/mcp/auth_callback',
+           'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM', 'https://mcp.example/mcp', '{read}', sha256('authority-connect-3'))$$,
+         :'own1_user_id', :'own1_session_id', :'owner_member'), 0);
+RESET ROLE;
+SELECT t.expect_count('the connect sign-in is recorded once',
+  format($$SELECT 1 FROM memory.human_sign_ins_used WHERE session_hash = sha256(uuid_send(%L::uuid)) AND purpose = 'connect'$$,
+         :'own3_session_id'), 1);
+SELECT t.expect_denied('a used sign-in record cannot be changed',
+  format($$UPDATE memory.human_sign_ins_used SET purpose = 'connect' WHERE session_hash = sha256(uuid_send(%L::uuid))$$, :'own1_session_id'));
+SELECT t.expect_denied('or deleted', 'DELETE FROM memory.human_sign_ins_used');
+SELECT t.expect_denied('or emptied', 'TRUNCATE memory.human_sign_ins_used');
+
+\echo '-- a person is one email'
+INSERT INTO memory.oauth_members (email, namespace_id, actor_id)
+  VALUES ('owner-assistant@client.test', :'c1', :'owner') RETURNING id AS assistant_member \gset
+SELECT * FROM t.sign_in('owner@client.test') \gset own5_
+SELECT * FROM t.sign_in('owner-assistant@client.test') \gset asst_
+SET ROLE engramport_app;
+SELECT t.expect_denied('while a second email can sign in as the owner, the owner''s sign-in cannot delegate',
+  format($$SELECT memory.delegate_approval_authority(%L, %L, %L, %L)$$, :'own5_user_id', :'own5_session_id', :'a_owner', :'helper'));
+SELECT t.expect_denied('nor can the second email''s',
+  format($$SELECT memory.delegate_approval_authority(%L, %L, %L, %L)$$, :'asst_user_id', :'asst_session_id', :'a_owner', :'helper'));
+RESET ROLE;
+UPDATE memory.oauth_members SET revoked_at = now() WHERE id = :'assistant_member';
 
 \echo '-- a delegation cannot be wider or longer than its authority'
 -- A temporary narrow authority to delegate from.
@@ -142,10 +195,28 @@ SELECT t.expect_count('left out, claim types and expiry are the authority''s own
 \echo '-- revoking an authority ends what was delegated from it'
 SELECT t.expect_count('the delegation is valid', format($$SELECT 1 WHERE memory.approval_authority_valid(%L)$$, :'a_helper'), 1);
 SET ROLE engramport_admin;
-UPDATE memory.approval_authorities SET revoked_at = now(), revoke_reason = 'owner_left' WHERE id = :'a_owner';
-SELECT t.expect_denied('a revoked authority stays revoked',
-  format($$UPDATE memory.approval_authorities SET revoked_at = NULL, revoke_reason = NULL WHERE id = %L$$, :'a_owner'));
+SELECT t.expect_denied('the admin role cannot revoke a delegation',
+  format($$UPDATE memory.approval_authorities SET revoked_at = now(), revoke_reason = 'owner_left' WHERE id = %L$$, :'a_helper'), true);
+SELECT t.expect_denied('or pass its revocation off as the grantor''s',
+  format($$UPDATE memory.approval_authorities SET revoked_at = now(), revoke_reason = 'revoked_by_grantor' WHERE id = %L$$, :'a_helper'), true);
+SELECT t.expect_denied('or say a top-level authority was revoked by a grantor',
+  format($$UPDATE memory.approval_authorities SET revoked_at = now(), revoke_reason = 'revoked_by_grantor' WHERE id = %L$$, :'a_promo'));
 RESET ROLE;
+SELECT t.expect_count('the delegation is still valid and unrevoked',
+  format($$SELECT 1 FROM memory.approval_authorities WHERE id = %L AND revoked_at IS NULL AND memory.approval_authority_valid(id)$$, :'a_helper'), 1);
+SELECT t.expect_denied('the table owner cannot mark a top-level authority revoked by a grantor either',
+  format($$UPDATE memory.approval_authorities SET revoked_at = now(), revoke_reason = 'revoked_by_grantor' WHERE id = %L$$, :'a_promo'));
+SET ROLE engramport_admin;
+UPDATE memory.approval_authorities SET revoked_at = now() - interval '1 year', revoke_reason = 'owner_left' WHERE id = :'a_owner';
+SELECT t.expect_denied('a revoked authority stays revoked',
+  format($$UPDATE memory.approval_authorities SET revoked_at = NULL, revoke_reason = NULL WHERE id = %L$$, :'a_owner'), true);
+RESET ROLE;
+SELECT t.expect_count('a revocation is stamped with the time it happened, not the time given',
+  format($$SELECT 1 FROM memory.approval_authorities WHERE id = %L AND revoked_at > now() - interval '1 minute'$$, :'a_owner'), 1);
+SELECT t.expect_denied('a revoked authority stays revoked, even for the table owner',
+  format($$UPDATE memory.approval_authorities SET revoked_at = NULL, revoke_reason = NULL WHERE id = %L$$, :'a_owner'));
+SELECT t.expect_denied('and its revocation time cannot be moved',
+  format($$UPDATE memory.approval_authorities SET revoked_at = now() - interval '1 year' WHERE id = %L$$, :'a_owner'));
 SELECT t.expect_count('the owner''s authority is no longer valid', format($$SELECT 1 WHERE memory.approval_authority_valid(%L)$$, :'a_owner'), 0);
 SELECT t.expect_count('nor the delegation made from it', format($$SELECT 1 WHERE memory.approval_authority_valid(%L)$$, :'a_helper'), 0);
 SET ROLE engramport_app;
@@ -163,6 +234,16 @@ SELECT memory.revoke_delegated_authority(:'oth4_user_id', :'oth4_session_id', :'
 RESET ROLE;
 SELECT t.expect_count('the grantor''s revocation holds',
   format($$SELECT 1 FROM memory.approval_authorities WHERE id = %L AND revoke_reason = 'revoked_by_grantor'$$, :'a_narrow_child'), 1);
+SELECT * FROM t.sign_in('other@client.test') \gset oth5_
+SET ROLE engramport_app;
+SELECT memory.delegate_approval_authority(:'oth5_user_id', :'oth5_session_id', :'a_narrow', :'helper') AS a_narrow_child2 \gset
+SELECT t.expect_denied('a sign-in spent on a revocation cannot revoke again',
+  format($$SELECT memory.revoke_delegated_authority(%L, %L, %L)$$, :'oth4_user_id', :'oth4_session_id', :'a_narrow_child2'));
+RESET ROLE;
+SELECT t.expect_count('so the second delegation stands', format($$SELECT 1 WHERE memory.approval_authority_valid(%L)$$, :'a_narrow_child2'), 1);
+INSERT INTO memory.approval_authorities (actor_id, namespace_id, scope, created_at, expires_at)
+  VALUES (:'other', :'c2', 'cell_knowledge', now() - interval '2 days', now() - interval '1 day') RETURNING id AS a_expired \gset
+SELECT t.expect_count('an expired authority is not valid', format($$SELECT 1 WHERE memory.approval_authority_valid(%L)$$, :'a_expired'), 0);
 SELECT t.expect_count('the founder''s authority is valid', format($$SELECT 1 WHERE memory.approval_authority_valid(%L)$$, :'a_founder'), 1);
 UPDATE memory.actors SET disabled_at = now() WHERE id = :'founder';
 SELECT t.expect_count('until the founder''s actor is disabled', format($$SELECT 1 WHERE memory.approval_authority_valid(%L)$$, :'a_founder'), 0);
@@ -178,11 +259,26 @@ SET ROLE engramport_app;
 SELECT t.expect_denied('a sign-in older than fifteen minutes',
   format($$SELECT memory.delegate_approval_authority(%L, %L, %L, %L)$$, :'stale_user', :'stale_session', :'a_narrow', :'helper'));
 RESET ROLE;
+INSERT INTO auth.sessions (id, user_id, created_at)
+  SELECT gen_random_uuid(), u.id, now() FROM auth.users u WHERE u.email = 'other@client.test'
+  RETURNING id AS pw_session, user_id AS pw_user \gset
+INSERT INTO auth.mfa_amr_claims (session_id, authentication_method) VALUES (:'pw_session', 'password');
+SET ROLE engramport_app;
+SELECT t.expect_denied('a fresh password sign-in',
+  format($$SELECT memory.delegate_approval_authority(%L, %L, %L, %L)$$, :'pw_user', :'pw_session', :'a_narrow', :'helper'));
+RESET ROLE;
 
 \echo '-- Supabase''s API roles get nothing'
 SELECT t.expect_count('no API role can use approval authority',
   $$SELECT 1 FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) r
-    WHERE has_table_privilege(r, 'memory.approval_authorities', 'SELECT')
-       OR has_table_privilege(r, 'memory.human_sign_ins_used', 'SELECT')
+    WHERE has_table_privilege(r, 'memory.approval_authorities', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
+       OR has_table_privilege(r, 'memory.human_sign_ins_used', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
        OR has_function_privilege(r, 'memory.delegate_approval_authority(uuid, uuid, uuid, uuid, memory.claim_type[], timestamptz)', 'EXECUTE')
-       OR has_function_privilege(r, 'memory.consume_human_sign_in(uuid, uuid, text)', 'EXECUTE')$$, 0);
+       OR has_function_privilege(r, 'memory.revoke_delegated_authority(uuid, uuid, uuid)', 'EXECUTE')
+       OR has_function_privilege(r, 'memory.approval_authority_valid(uuid)', 'EXECUTE')
+       OR has_function_privilege(r, 'memory.consume_human_sign_in(uuid, uuid, text)', 'EXECUTE')
+       OR has_function_privilege(r, 'memory.oauth_issue_code(uuid, uuid, text, uuid, text, text, text, text[], bytea)', 'EXECUTE')$$, 0);
+SELECT t.expect_count('and the server cannot write authority or sign-in records directly',
+  $$SELECT 1 WHERE has_table_privilege('engramport_app', 'memory.approval_authorities', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
+                OR has_table_privilege('engramport_app', 'memory.human_sign_ins_used', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
+                OR has_function_privilege('engramport_app', 'memory.consume_human_sign_in(uuid, uuid, text)', 'EXECUTE')$$, 0);

@@ -185,6 +185,17 @@ export interface ExportRow {
   counts: Record<string, number> | null;
 }
 
+export interface RestorationRow {
+  id: string;
+  namespace: string;
+  memory_id: string;
+  restored_by: string;
+  authority_id: string;
+  retracted_at: Date;
+  restored_at: Date;
+  restored_to: "active" | "proposed";
+}
+
 export interface DataGrantRow {
   id: string;
   namespace: string;
@@ -925,6 +936,32 @@ export class AdminClient {
   }
 
   /**
+   * Restorations of retracted memories, newest first: who brought which memory
+   * back, under which authority, and which retraction it reversed. Never the
+   * text; the admin can't restore anything.
+   */
+  async listRestorations(opts: { namespace?: string; sinceMs?: number; limit?: number } = {}): Promise<RestorationRow[]> {
+    if (opts.namespace) checkPath(opts.namespace);
+    const limit = opts.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new AdminError("--limit is 1 to 1000");
+    const since = opts.sinceMs === undefined ? null : new Date(Date.now() - opts.sinceMs);
+    return this.tx(async (c) =>
+      (await c.query<RestorationRow>(
+        `SELECT r.id, n.path AS namespace, r.memory_id, a.slug AS restored_by, r.authority_id, r.retracted_at,
+                r.restored_at, r.restored_to::text AS restored_to
+         FROM memory.restorations r
+         JOIN memory.namespaces n ON n.id = r.namespace_id
+         JOIN memory.actors a ON a.id = r.restored_by_actor_id
+         WHERE ($1::text IS NULL OR n.path = $1 OR starts_with(n.path, $1 || '/'))
+           AND ($2::timestamptz IS NULL OR r.restored_at >= $2)
+         ORDER BY r.restored_at DESC, r.id
+         LIMIT $3`,
+        [opts.namespace ?? null, since, limit],
+      )).rows,
+    );
+  }
+
+  /**
    * Delegated erase and export grants: who gave which power to whom over which
    * namespace, until when, and whether it counts now. Never content.
    */
@@ -1142,6 +1179,11 @@ export const ADMIN_USAGE = `Usage: engramport admin <command>
                                      authority, and whether it was delivered,
                                      with counts. Never content; the admin can't
                                      export.
+  restore list [--namespace <path>] [--since 7d] [--limit 100]
+                                     who restored which retracted memory, under
+                                     which authority, and when it was retracted.
+                                     Never the text; the admin can't restore. A
+                                     person with authority restores within 30 days.
   grant list [--namespace <path>] [--all]
                                      delegated erase and export grants: who gave
                                      which power to whom, until when, and whether
@@ -1521,6 +1563,21 @@ export async function runAdmin(argv: string[], open: () => AdminClient, io: Admi
           io.out(`${when(e.issued_at)}  ${e.id}  ${e.namespace}  by ${e.actor} under ${e.authority_id}  ${state}`);
         }
         if (!rows.length) io.err("No exports.");
+        return 0;
+      }
+      case "restore list": {
+        const { positional, flags } = parseFlags(rest, { namespace: "value", since: "value", limit: "value" });
+        if (positional.length) throw new UsageError(`unexpected argument ${positional[0]}`);
+        const rows = await db().listRestorations({
+          namespace: typeof flags.namespace === "string" ? flags.namespace : undefined,
+          sinceMs: typeof flags.since === "string" ? parseDuration(flags.since) : undefined,
+          limit: typeof flags.limit === "string" ? Number(flags.limit) : undefined,
+        });
+        for (const r of rows) {
+          io.out(`${when(r.restored_at)}  ${r.id}  ${r.namespace}  memory ${r.memory_id} back to ${r.restored_to}`
+            + `  by ${r.restored_by} under ${r.authority_id}  (retracted ${when(r.retracted_at)})`);
+        }
+        if (!rows.length) io.err("No restorations.");
         return 0;
       }
       case "authority revoke": {

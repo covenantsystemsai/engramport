@@ -18,7 +18,11 @@ Founder decision D-02, decided Nov 4:
   authorized batches or through whole-cell erasure.
 - **Whole-cell erasure.** The owner starts it; a different authenticated person
   with AN2B governance authority confirms after seeing the impact preview. The
-  person who started it can't be the second.
+  person who started it can't be the second. Decided Nov 4 (D-02.1a): that
+  authority is a dedicated cell-erasure-confirmer role, explicitly assigned to
+  a named person who accepts it with their own sign-in, scoped, expiring or
+  revocable, and separate from approving memories. The confirmer sees no
+  memory content and can't start or confirm their own request.
 - **Retraction is not erasure.** Retracting takes a memory out of retrieval and
   authority at once. Only an authorized person can restore it within 30 days,
   after which the retraction is final. Retraction never triggers erasure, and
@@ -43,8 +47,8 @@ Founder decision D-02, decided Nov 4:
 | The owner's page to review and confirm: `/erase/<request id>` | Built, off unless `ENGRAMPORT_ERASURE_PAGE=true` |
 | Export by an owner: `/export` | Built, off unless `ENGRAMPORT_EXPORT_PAGE=true`; see Export below |
 | Delegated erase and export grants | Built in the database (`0024_data_grants.sql`); the page where owners give them and holders accept them is next |
-| Whole-cell erasure with a second confirmer | To build |
-| 30-day retraction recovery window | To build |
+| Whole-cell erasure with a cell-erasure-confirmer (D-02.1a) | To build |
+| 30-day retraction restore window | Built in the database (`0025_retraction_restore.sql`) with the admin ledger `engramport admin restore list`; the restore page is next. See Retraction and restoring below |
 
 ## The page
 
@@ -225,3 +229,39 @@ namespace (D-02 item 2 and D-02.4). The database side is
 
 The page where owners give grants and holders accept them is the next step;
 until then these are database functions only, like approval delegation.
+
+## Retraction and restoring
+
+Founder decision D-02.3. The database side is
+`db/migrations/0025_retraction_restore.sql`; its tests are
+`db/test/restore_test.sql`.
+
+- **Retracting** (an agent's `delete_memory`, withdrawing a revision) takes a
+  memory out of recall and authority at once and keeps its text. The database
+  stamps when it happened and what the memory was before. No role can set or
+  move that stamp, so the window can't be stretched. Nothing is erased.
+- **Who restores.** A person holding approval authority over the memory's
+  namespace and claim type, the same people who may approve it, with their own
+  fresh sign-in, in three steps like approving: review
+  (`memory.restore_review`), a single-use challenge bound to the person, the
+  memory, that exact retraction and the authority
+  (`memory.issue_restore_challenge`), and the decision, which spends the
+  sign-in and the challenge together (`memory.decide_restore_challenge`). No
+  agent, key or admin can restore.
+- **The window.** 30 days from the retraction by the wall clock, checked when
+  the challenge is issued and again when the decision is written. After that,
+  and for memories retracted before this existed, the retraction is final.
+- **What comes back.** The memory returns to what it was, with its approval
+  state unchanged: a current memory comes back current unless another current
+  memory now holds its key; a withdrawn revision comes back as a proposal only
+  while the version it revises is still the current approved one. A version
+  that was already replaced when it was retracted is not restored. An erased
+  memory is never restored.
+- **The record.** Each restoration names the memory, the person, the
+  authority, the challenge and the retraction it reversed. Challenges and
+  restorations are never changed or deleted and hold no text or digest of it,
+  so a later erasure leaves no fingerprint there. The admin sees them with
+  `engramport admin restore list`, never the text.
+
+The page where a person reviews a retracted memory and restores it is next;
+until then these are database functions only.

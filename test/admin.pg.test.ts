@@ -406,13 +406,27 @@ describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABA
     assert.equal(await runAdmin(["member", "revoke", email, "--namespace", cell], open, io), 1);
   });
 
+  // Stands in for the holder accepting through their own Google sign-in, which
+  // the database tests cover; here only the admin's view of it matters.
+  async function acceptAsHolder(authorityId: string): Promise<void> {
+    const sess = randomBytes(32);
+    await superPool.query(
+      `WITH a AS (SELECT actor_id FROM memory.approval_authorities WHERE id = $1),
+            s AS (INSERT INTO memory.human_sign_ins_used (session_hash, actor_id, purpose)
+                  SELECT $2, actor_id, 'accept' FROM a RETURNING session_hash, actor_id)
+       INSERT INTO memory.approval_authority_decisions (authority_id, actor_id, decision, grant_sha256, sign_in_hash)
+       SELECT $1, s.actor_id, 'accept', memory.approval_authority_grant_sha256($1), s.session_hash FROM s`,
+      [authorityId, sess]);
+  }
+
   test("approval authority goes to humans only, in the scope its namespace allows", async () => {
     const owner = `owner-${run}`;
     await admin.createActor(owner, "human", "Pilot owner");
     await admin.createActor(`bot-${run}`, "agent", "An agent");
     const a = await admin.grantAuthority({ actor: owner, namespace: cell, scope: "cell_knowledge", canDelegate: true });
-    assert.deepEqual([a.actor, a.namespace, a.scope, a.claim_types, a.can_delegate, a.parent_id, a.valid],
-      [owner, cell, "cell_knowledge", null, true, null, true]);
+    // A grant is only an offer until its holder accepts it (0017).
+    assert.deepEqual([a.actor, a.namespace, a.scope, a.claim_types, a.can_delegate, a.parent_id, a.acceptance, a.valid],
+      [owner, cell, "cell_knowledge", null, true, null, "pending", false]);
     const narrow = await admin.grantAuthority({
       actor: owner, namespace: cell, scope: "cell_knowledge", claimTypes: ["decision", "fact", "fact"], expiresInMs: 86_400_000,
     });
@@ -444,6 +458,12 @@ describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABA
     assert.ok(!(await admin.listAuthorities({ actor: owner })).some((r) => r.id === a.id));
     assert.ok((await admin.listAuthorities({ actor: owner, includeRevoked: true })).some((r) => r.id === a.id));
 
+    // The holder's acceptance, as memory.decide_approval_authority records it.
+    await acceptAsHolder(narrow.id);
+    const [taken] = (await admin.listAuthorities({ actor: owner })).filter((r) => r.id === narrow.id);
+    assert.deepEqual([taken.acceptance, taken.valid], ["accepted", true]);
+    assert.ok(taken.decided_at instanceof Date);
+
     // Disabling the holder makes the authority invalid without revoking it.
     await admin.setActorDisabled(owner, true);
     try {
@@ -463,13 +483,18 @@ describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABA
     await admin.createActor(holder, "human", "Another owner");
     assert.equal(await runAdmin(["authority", "grant", holder, "--namespace", cell, "--scope", "cell_knowledge",
       "--claim-types", "decision,fact", "--can-delegate", "--expires-in", "30d"], open, io), 0, err.join("\n"));
-    const line = out.at(-1)!;
+    assert.deepEqual(out.slice(-1), ["It counts only once they accept it with their own Google sign-in."]);
+    const line = out.at(-2)!;
     assert.match(line, new RegExp(`^[0-9a-f-]{36}  ${holder} may approve decision, fact in ${cell} \\(cell_knowledge\\), and may delegate, until `));
     const id = line.slice(0, 36);
     out.length = 0;
     assert.equal(await runAdmin(["authority", "list", "--actor", holder], open, io), 0);
     assert.equal(out.length, 1);
-    assert.match(out[0], /granted by admin  valid$/);
+    assert.match(out[0], /granted by admin  waiting for the holder to accept$/);
+    await acceptAsHolder(id);
+    out.length = 0;
+    assert.equal(await runAdmin(["authority", "list", "--actor", holder], open, io), 0);
+    assert.match(out[0], /granted by admin  valid, accepted /);
     assert.equal(await runAdmin(["authority", "grant", holder, "--namespace", cell], open, io), 2);
     assert.equal(await runAdmin(["authority", "revoke", id], open, io), 2);
     out.length = 0;

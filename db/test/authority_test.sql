@@ -26,6 +26,16 @@ BEGIN
 END
 $$;
 
+-- The holder accepts a grant with their own fresh sign-in (0017).
+CREATE FUNCTION t.accept(p_authority uuid, p_email text) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE s record;
+BEGIN
+  SELECT * INTO s FROM t.sign_in(p_email);
+  PERFORM memory.decide_approval_authority(s.user_id, s.session_id, p_authority, 'accept',
+                                           memory.approval_authority_grant_sha256(p_authority));
+END
+$$;
+
 SELECT id AS co_city FROM memory.namespaces WHERE purpose = 'company' AND parent_id IS NULL \gset
 SELECT id AS co_hq FROM memory.namespaces WHERE purpose = 'company' AND level = 'cell' AND slug = 'hq' \gset
 
@@ -83,8 +93,8 @@ SELECT t.expect_denied('the table owner cannot delete an authority either',
   format($$DELETE FROM memory.approval_authorities WHERE id = %L$$, :'a_other'));
 SELECT t.expect_denied('or empty the table', 'TRUNCATE memory.approval_authorities CASCADE');
 SET ROLE engramport_admin;
-SELECT t.expect_count('the admin role can check an authority',
-  format($$SELECT 1 WHERE memory.approval_authority_valid(%L)$$, :'a_owner'), 1);
+SELECT t.expect_count('the admin role can check an authority; a grant not yet accepted is not valid',
+  format($$SELECT 1 WHERE memory.approval_authority_valid(%L)$$, :'a_owner'), 0);
 RESET ROLE;
 
 \echo '-- the server never touches authority directly'
@@ -96,6 +106,12 @@ SELECT t.expect_denied('the app cannot read used sign-ins', 'SELECT 1 FROM memor
 SELECT t.expect_denied('the app cannot use a sign-in directly',
   $$SELECT memory.consume_human_sign_in(gen_random_uuid(), gen_random_uuid(), 'approve')$$);
 RESET ROLE;
+
+-- Each holder accepts their grant (0017 tests what happens before they do).
+SELECT t.accept(:'a_founder', 'founder@an2b.test');
+SELECT t.accept(:'a_owner', 'owner@client.test');
+SELECT t.accept(:'a_other', 'other@client.test');
+SELECT t.accept(:'a_promo', 'founder@an2b.test');
 
 \echo '-- delegation needs the holder''s own fresh sign-in, once'
 SELECT * FROM t.sign_in('owner@client.test') \gset own1_
@@ -125,6 +141,7 @@ SELECT t.expect_denied('an authority marked not delegable cannot be delegated, e
 SELECT t.expect_denied('a user id with someone else''s session is no sign-in',
   format($$SELECT memory.delegate_approval_authority(%L, %L, %L, %L)$$, :'own3_user_id', :'help_session_id', :'a_owner', :'helper'));
 RESET ROLE;
+SELECT t.accept(:'a_helper', 'helper@client.test');
 SELECT t.expect_count('the delegation keeps namespace and scope, narrows claim types, cannot delegate',
   format($$SELECT 1 FROM memory.approval_authorities WHERE id = %L AND parent_id = %L AND granted_by_actor_id = %L
            AND namespace_id = %L AND scope = 'cell_knowledge' AND claim_types = '{observation,fact}' AND NOT can_delegate$$,
@@ -178,6 +195,7 @@ SET ROLE engramport_admin;
 INSERT INTO memory.approval_authorities (actor_id, namespace_id, scope, claim_types, can_delegate, expires_at)
   VALUES (:'other', :'c2', 'cell_knowledge', '{decision}', true, now() + interval '7 days') RETURNING id AS a_narrow \gset
 RESET ROLE;
+SELECT t.accept(:'a_narrow', 'other@client.test');
 SELECT * FROM t.sign_in('other@client.test') \gset oth1_
 SELECT * FROM t.sign_in('other@client.test') \gset oth2_
 SELECT * FROM t.sign_in('other@client.test') \gset oth3_
@@ -240,6 +258,7 @@ SELECT memory.delegate_approval_authority(:'oth5_user_id', :'oth5_session_id', :
 SELECT t.expect_denied('a sign-in spent on a revocation cannot revoke again',
   format($$SELECT memory.revoke_delegated_authority(%L, %L, %L)$$, :'oth4_user_id', :'oth4_session_id', :'a_narrow_child2'));
 RESET ROLE;
+SELECT t.accept(:'a_narrow_child2', 'helper@client.test');
 SELECT t.expect_count('so the second delegation stands', format($$SELECT 1 WHERE memory.approval_authority_valid(%L)$$, :'a_narrow_child2'), 1);
 INSERT INTO memory.approval_authorities (actor_id, namespace_id, scope, created_at, expires_at)
   VALUES (:'other', :'c2', 'cell_knowledge', now() - interval '2 days', now() - interval '1 day') RETURNING id AS a_expired \gset

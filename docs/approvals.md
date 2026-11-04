@@ -12,12 +12,13 @@ a memory, a field or a tool argument that a writer sets. So:
 
 - No write can set `approval_state` or `verification_state` (0014). Every new
   memory starts at `none` / `unverified`, whatever its text says.
-- Approval authority belongs only to a **human actor** (0015).
+- Approval authority belongs only to a **human actor** (0015), and only once
+  that person has **accepted the exact grant** with their own sign-in (0017).
 - That person proves it is them with a **fresh Google sign-in** that the
   database checks against Supabase Auth itself (`memory.oauth_signed_in_email`
   from 0009): signed in with Google, within the last 15 minutes, on an email that
   maps to exactly one enabled human actor through an unrevoked membership.
-- Each sign-in does **one** authority act (approve, delegate or revoke), then
+- Each sign-in does **one** authority act (accept, approve, delegate or revoke), then
   is recorded as spent. A second act needs a new sign-in. A sign-in used to
   connect a client (the OAuth flow) is spent for authority acts too, and one
   already spent on an authority act can't connect a client. The sign-in is
@@ -35,13 +36,13 @@ a memory, a field or a tool argument that a writer sets. So:
 |---|------|-------|
 | 1 | The founder approves within explicitly assigned company scopes | `company_governance` authority, granted per company namespace (0015) |
 | 2 | Each client namespace owner approves within their own cell | `cell_knowledge` authority, granted on one client cell (0015) |
-| 3 | Owners delegate limited authority through an explicit, auditable grant | `memory.delegate_approval_authority`: fresh sign-in, same namespace and scope, same or fewer claim types, no later expiry, no re-delegation (0015) |
+| 3 | Owners delegate limited authority through an explicit, auditable grant | `memory.delegate_approval_authority`: fresh sign-in, same namespace and scope, same or fewer claim types, no later expiry, no re-delegation (0015). The delegate must accept it too (0017) |
 | 4 | Agents propose and recommend, never approve or impersonate a person | Authority is human-only; a decision needs a human sign-in; agents can only ask; the trust guard refuses every other change (0014, 0015, 0016) |
 | 5 | Tower and city promotion needs separate AN2B governance approval | `promotion` authority, only on a tower or city; every tower or city memory needs it, and it approves nothing in a cell (0015, 0016) |
 | 6 | Engineering, security, financial and deployment approvals stay separate | EngramPort records memory approvals only. No scope here covers anything else |
 | 7 | Approval binds to the exact memory id, version, content digest, action and namespace | `memory.approvals` (0016). Each version is its own memory row, so the id pins the version |
 | 8 | A changed or superseded memory needs fresh approval | A change is a new version with a new id and digest, which starts at `none` (0014). Deciding checks it is still the active version and the digest matches (0016) |
-| 9 | Revoked authority invalidates future approvals and stops reuse | Validity is checked up the whole chain at the moment of use: unrevoked, unexpired, enabled humans. Revoking an owner ends every delegation from it (0015) |
+| 9 | Revoked authority invalidates future approvals and stops reuse | Validity is checked up the whole chain at the moment of use: unrevoked, unexpired, accepted, enabled humans. Revoking an owner ends every delegation from it (0015, 0017) |
 | 10 | Full audit provenance, no content for content-blind admins | Authorities, requests and decisions carry ids, actors, namespaces, scopes and times. The admin reads those, never memory text, digest or sign-in (0015, 0016) |
 
 ## What is built
@@ -105,6 +106,39 @@ a memory, a field or a tool argument that a writer sets. So:
   authority they used. Nothing approved is held back to be applied later, so
   there is no unused approval to replay.
 
+**Migration 0017 (D-03A, approver acceptance)**
+
+Founder decision D-03A: a newly granted approver must personally accept the
+authority with an authenticated sign-in before it becomes active, bound to the
+precise grant. Pending, rejected, expired or revoked grants confer nothing.
+
+- Granting, by the admin or by an owner's delegation, now only **offers**
+  authority. `memory.approval_authority_valid` is false until the holder has
+  accepted, and that holds at every link of a delegation chain.
+- `memory.pending_authority_grants(user, session)`: what the signed-in person
+  has been offered and not yet decided, with every term (namespace, scope,
+  claim types, whether it may be delegated, expiry, the authority it came from)
+  and the grant's fingerprint. Looking does not spend the sign-in.
+- `memory.decide_approval_authority(user, session, authority, accept|reject, sha256)`:
+  the holder accepts or rejects one grant with a fresh, single-use sign-in and
+  the fingerprint of what they were shown. The fingerprint covers every term
+  above plus who granted it, so the acceptance binds to that exact grant.
+  Someone else's grant and no grant give the same answer. A revoked or expired
+  grant, a parent that is no longer valid, or a fingerprint that doesn't match
+  are refused.
+- A decision is made once and is final. A rejected grant stays rejected; a new
+  offer is a new grant. A pending grant can't be delegated from.
+- `memory.approval_authority_decisions` is append-only for every role. The
+  admin sees whether and when each grant was decided, never the sign-in, and
+  cannot decide for anyone. The server cannot read it directly.
+- `engramport admin authority grant` says the grant counts only once accepted,
+  and `authority list` shows "waiting for the holder to accept", "rejected by
+  the holder" or "valid, accepted".
+
+This closes I7: the admin can still create a person and offer them authority,
+but nothing counts until that person signs in with their own Google account and
+accepts it. The acceptance page itself is part of the approval page below.
+
 **Next: the approval page.** A small page where the person signs in with
 Google in their own browser, sees the memory, and approves or rejects it. It
 calls `record_approval` with that sign-in and the digest of what it showed. It
@@ -146,7 +180,7 @@ open for the founder.
 | L5 | The table owner could delete or truncate authority and sign-in records | Low | Fixed. Delete and truncate are refused for every role |
 | L6 | A sign-in isn't tied to the act it was taken for, and a refused act doesn't spend it | Low | Open, by design for now. Any act still needs the holder's own fresh Google sign-in and valid authority. The approval page should take one sign-in for one named act |
 | C1 | Codex on `7fb145e`: the M2 fix had a race. A connect and an authority act using the same sign-in at the same moment could both succeed | Medium | Fixed. Connecting now records the sign-in first and then checks how it was used, so the second of two racing uses always fails. A two-session test proves it, and fails on the earlier code |
-| I7 | The admin role can create a human actor, give it a membership and grant it authority, so the admin can make an approver | Info | Open, founder decision. Options: a second person confirms each top-level grant, or the grantee accepts it with their own sign-in |
+| I7 | The admin role can create a human actor, give it a membership and grant it authority, so the admin can make an approver | Info | Founder decided D-03A: the grantee must accept with their own sign-in. Built in 0017 |
 
 Tests added for each fix: the admin can't revoke, relabel or backdate a
 delegation's revocation; a revoked authority stays revoked for every role;
@@ -184,14 +218,21 @@ here so they are known:
 now carries PR 41's fixes, and in line with L5 its approval records also refuse
 truncation by any role. Local verification on that revision: database suite
 484 checks plus the two race checks passed, unit tests 77 passed, store and database tests 90 passed,
-typecheck clean. It needs a fresh review on its new head, and is held until
-PR 41 merges before it is retargeted to main.
+typecheck clean. After PR 41 merged it was retargeted to main, with
+final head `9419f07`. On that head every GitHub check passed (test, db,
+gte-small, secrets, analyze, CodeQL), GitHub reports it mergeable and clean,
+and there are no review comments. A security review was requested from Codex on
+`9419f07`, naming approval requests and decisions, the trust guard, sign-in
+binding, namespace scope and the admin view. Codex reviewed `9419f07` and
+reported no major issues. Codex's separate security-review record stays empty
+on every PR in this repository, so this rests on its review of that head after
+the security request. PR 42 is held for the founder's merge decision.
 
 **Merge decisions.** The review found issues on PR 41's first version, so the
 fixes went back to the founder before any merge. On the founder's yes, PR 41
 was merged at its verified head `2107f91` (all checks green, no open findings)
 as `038c206` on main. PR 42 was then retargeted to main and stays open for its
 own review and decision. Neither migration is applied to the live project, no
-owner is provisioned and no live authority is granted. Still open for the
-founder: whether a new approver must accept a grant with their own sign-in, and
-tying each sign-in to one named act on the approval page.
+owner is provisioned and no live authority is granted. The founder has
+since decided D-03A (acceptance, built in 0017) and D-03B (single-use approval
+challenges on the approval page, next).

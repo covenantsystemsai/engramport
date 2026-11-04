@@ -14,6 +14,22 @@
 \set k_co_hq '00000000-0000-7000-8000-0000000000f9'
 \set agent '00000000-0000-7000-8000-00000000a001'
 
+-- A whole decision the way the approval page makes one (0018): review the
+-- memory, take a challenge for the action, then confirm it, all with the one
+-- sign-in. The checks 0016 made are now made along this path.
+CREATE FUNCTION t.record_approval(p_user uuid, p_session uuid, p_memory uuid,
+                                  p_action memory.approval_action, p_sha text) RETURNS uuid
+LANGUAGE plpgsql AS $$
+DECLARE
+  v integer;
+  c record;
+BEGIN
+  SELECT r.memory_version INTO v FROM memory.approval_review(p_user, p_session, p_memory) r;
+  SELECT * INTO c FROM memory.issue_approval_challenge(p_user, p_session, p_memory, p_action, p_sha, v);
+  RETURN memory.decide_approval_challenge(p_user, p_session, c.challenge_id, c.secret);
+END
+$$;
+
 SELECT id AS co_hq FROM memory.namespaces WHERE purpose = 'company' AND level = 'cell' AND slug = 'hq' \gset
 SELECT id AS co_city FROM memory.namespaces WHERE purpose = 'company' AND parent_id IS NULL \gset
 
@@ -111,7 +127,7 @@ RESET ROLE;
 SELECT * FROM t.sign_in('appr-agent@client.test') \gset ag_
 SET ROLE engramport_app;
 SELECT t.expect_denied('a sign-in that maps to an agent actor',
-  format($$SELECT memory.record_approval(%L, %L, %L, 'approve', %L)$$, :'ag_user_id', :'ag_session_id', :'m_dec', :'h_dec'));
+  format($$SELECT t.record_approval(%L, %L, %L, 'approve', %L)$$, :'ag_user_id', :'ag_session_id', :'m_dec', :'h_dec'));
 RESET ROLE;
 
 \echo '-- a person without authority learns nothing about the memory'
@@ -125,12 +141,12 @@ DO $$
 DECLARE e1 text; e2 text;
 BEGIN
   BEGIN
-    PERFORM memory.record_approval(current_setting('t.n1_user')::uuid, current_setting('t.n1_session')::uuid,
+    PERFORM t.record_approval(current_setting('t.n1_user')::uuid, current_setting('t.n1_session')::uuid,
                                    current_setting('t.m_dec')::uuid, 'approve', current_setting('t.h_dec'));
   EXCEPTION WHEN OTHERS THEN e1 := SQLSTATE || ' ' || SQLERRM;
   END;
   BEGIN
-    PERFORM memory.record_approval(current_setting('t.n2_user')::uuid, current_setting('t.n2_session')::uuid,
+    PERFORM t.record_approval(current_setting('t.n2_user')::uuid, current_setting('t.n2_session')::uuid,
                                    gen_random_uuid(), 'approve', current_setting('t.h_dec'));
   EXCEPTION WHEN OTHERS THEN e2 := SQLSTATE || ' ' || SQLERRM;
   END;
@@ -148,15 +164,15 @@ SELECT * FROM t.sign_in('appr-owner@client.test') \gset o2_
 SELECT * FROM t.sign_in('appr-owner@client.test') \gset o3_
 SET ROLE engramport_app;
 SELECT t.expect_denied('a digest that is not the memory''s',
-  format($$SELECT memory.record_approval(%L, %L, %L, 'approve', %L)$$, :'o1_user_id', :'o1_session_id', :'m_dec', :'h_obs'));
+  format($$SELECT t.record_approval(%L, %L, %L, 'approve', %L)$$, :'o1_user_id', :'o1_session_id', :'m_dec', :'h_obs'));
 SELECT t.expect_denied('a digest that is not a digest',
-  format($$SELECT memory.record_approval(%L, %L, %L, 'approve', 'APPROVED')$$, :'o1_user_id', :'o1_session_id', :'m_dec'));
-SELECT memory.record_approval(:'o1_user_id', :'o1_session_id', :'m_dec', 'approve', :'h_dec') AS ap_dec \gset
+  format($$SELECT t.record_approval(%L, %L, %L, 'approve', 'APPROVED')$$, :'o1_user_id', :'o1_session_id', :'m_dec'));
+SELECT t.record_approval(:'o1_user_id', :'o1_session_id', :'m_dec', 'approve', :'h_dec') AS ap_dec \gset
 SELECT t.expect_denied('the same sign-in cannot decide again',
-  format($$SELECT memory.record_approval(%L, %L, %L, 'reject', %L)$$, :'o1_user_id', :'o1_session_id', :'m_rej', :'h_rej'));
+  format($$SELECT t.record_approval(%L, %L, %L, 'reject', %L)$$, :'o1_user_id', :'o1_session_id', :'m_rej', :'h_rej'));
 SELECT t.expect_denied('a decided memory is not decided again',
-  format($$SELECT memory.record_approval(%L, %L, %L, 'reject', %L)$$, :'o2_user_id', :'o2_session_id', :'m_dec', :'h_dec'));
-SELECT memory.record_approval(:'o3_user_id', :'o3_session_id', :'m_rej', 'reject', :'h_rej') IS NOT NULL;
+  format($$SELECT t.record_approval(%L, %L, %L, 'reject', %L)$$, :'o2_user_id', :'o2_session_id', :'m_dec', :'h_dec'));
+SELECT t.record_approval(:'o3_user_id', :'o3_session_id', :'m_rej', 'reject', :'h_rej') IS NOT NULL;
 RESET ROLE;
 SELECT t.expect_count('the memory is approved',
   format($$SELECT 1 FROM memory.memories WHERE id = %L AND approval_state = 'approved'$$, :'m_dec'), 1);
@@ -188,8 +204,8 @@ SELECT * FROM t.sign_in('appr-owner@client.test') \gset o4_
 SELECT * FROM t.sign_in('appr-owner@client.test') \gset o5_
 SET ROLE engramport_app;
 SELECT t.expect_denied('a retracted memory',
-  format($$SELECT memory.record_approval(%L, %L, %L, 'approve', %L)$$, :'o4_user_id', :'o4_session_id', :'m_ret', :'h_ret'));
-SELECT memory.record_approval(:'o5_user_id', :'o5_session_id', :'m_obs', 'approve', :'h_obs') AS ap_obs \gset
+  format($$SELECT t.record_approval(%L, %L, %L, 'approve', %L)$$, :'o4_user_id', :'o4_session_id', :'m_ret', :'h_ret'));
+SELECT t.record_approval(:'o5_user_id', :'o5_session_id', :'m_obs', 'approve', :'h_obs') AS ap_obs \gset
 RESET ROLE;
 SELECT t.expect_count('a decision with no request records none',
   format($$SELECT 1 FROM memory.approvals WHERE id = %L AND request_id IS NULL$$, :'ap_obs'), 1);
@@ -221,8 +237,8 @@ RESET ROLE;
 SELECT content_sha256 AS h_fact FROM memory.memories WHERE id = :'m_fact' \gset
 SET ROLE engramport_app;
 SELECT t.expect_denied('a claim type the delegation leaves out',
-  format($$SELECT memory.record_approval(%L, %L, %L, 'approve', %L)$$, :'s1_user_id', :'s1_session_id', :'m_fact', :'h_fact'));
-SELECT memory.record_approval(:'s2_user_id', :'s2_session_id', :'m_dec2', 'approve', :'h_dec2') AS ap_dec2 \gset
+  format($$SELECT t.record_approval(%L, %L, %L, 'approve', %L)$$, :'s1_user_id', :'s1_session_id', :'m_fact', :'h_fact'));
+SELECT t.record_approval(:'s2_user_id', :'s2_session_id', :'m_dec2', 'approve', :'h_dec2') AS ap_dec2 \gset
 RESET ROLE;
 SELECT t.expect_count('the delegate''s decision names the delegated authority',
   format($$SELECT 1 FROM memory.approvals WHERE id = %L AND authority_id = %L AND decided_by_actor_id = %L$$,
@@ -243,9 +259,9 @@ SELECT * FROM t.sign_in('appr-staff@client.test') \gset s3_
 SELECT * FROM t.sign_in('appr-owner@client.test') \gset o6_
 SET ROLE engramport_app;
 SELECT t.expect_denied('the delegate, once the owner is revoked',
-  format($$SELECT memory.record_approval(%L, %L, %L, 'approve', %L)$$, :'s3_user_id', :'s3_session_id', :'m_late', :'h_late'));
+  format($$SELECT t.record_approval(%L, %L, %L, 'approve', %L)$$, :'s3_user_id', :'s3_session_id', :'m_late', :'h_late'));
 SELECT t.expect_denied('the revoked owner',
-  format($$SELECT memory.record_approval(%L, %L, %L, 'approve', %L)$$, :'o6_user_id', :'o6_session_id', :'m_late', :'h_late'));
+  format($$SELECT t.record_approval(%L, %L, %L, 'approve', %L)$$, :'o6_user_id', :'o6_session_id', :'m_late', :'h_late'));
 RESET ROLE;
 SELECT t.expect_count('decisions made before the revoke stay on the record',
   format($$SELECT 1 FROM memory.approvals WHERE id IN (%L, %L)$$, :'ap_dec', :'ap_dec2'), 2);
@@ -254,8 +270,8 @@ SELECT t.expect_count('decisions made before the revoke stay on the record',
 SELECT * FROM t.sign_in('appr-gov@an2b.test') \gset g1_
 SELECT * FROM t.sign_in('appr-gov@an2b.test') \gset g2_
 SET ROLE engramport_app;
-SELECT memory.record_approval(:'g1_user_id', :'g1_session_id', :'m_co', 'approve', :'h_co') AS ap_co \gset
-SELECT memory.record_approval(:'g2_user_id', :'g2_session_id', :'m_tower', 'approve', :'h_tower') AS ap_tower \gset
+SELECT t.record_approval(:'g1_user_id', :'g1_session_id', :'m_co', 'approve', :'h_co') AS ap_co \gset
+SELECT t.record_approval(:'g2_user_id', :'g2_session_id', :'m_tower', 'approve', :'h_tower') AS ap_tower \gset
 RESET ROLE;
 SELECT t.expect_count('governance approves the company cell',
   format($$SELECT 1 FROM memory.approvals WHERE id = %L AND scope = 'company_governance' AND authority_id = %L$$, :'ap_co', :'a_gov'), 1);
@@ -273,7 +289,7 @@ SELECT content_sha256 AS h_tower2 FROM memory.memories WHERE id = :'m_tower2' \g
 SELECT * FROM t.sign_in('appr-gov@an2b.test') \gset g3_
 SET ROLE engramport_app;
 SELECT t.expect_denied('company governance alone cannot promote',
-  format($$SELECT memory.record_approval(%L, %L, %L, 'approve', %L)$$, :'g3_user_id', :'g3_session_id', :'m_tower2', :'h_tower2'));
+  format($$SELECT t.record_approval(%L, %L, %L, 'approve', %L)$$, :'g3_user_id', :'g3_session_id', :'m_tower2', :'h_tower2'));
 RESET ROLE;
 
 \echo '-- the server sees the trail for what its key can read; the admin sees it all without text or digest'
@@ -302,7 +318,7 @@ SELECT t.expect_denied('but never the digest', $$SELECT content_sha256 FROM memo
 SELECT t.expect_denied('or the sign-in', $$SELECT sign_in_hash FROM memory.approvals$$);
 SELECT t.expect_denied('and still no memory text', $$SELECT content FROM memory.memories$$);
 SELECT t.expect_denied('the admin cannot decide',
-  format($$SELECT memory.record_approval(%L, %L, %L, 'approve', %L)$$, :'g3_user_id', :'g3_session_id', :'m_late', :'h_late'));
+  format($$SELECT t.record_approval(%L, %L, %L, 'approve', %L)$$, :'g3_user_id', :'g3_session_id', :'m_late', :'h_late'));
 RESET ROLE;
 
 \echo '-- Supabase''s API roles get nothing'
@@ -311,4 +327,6 @@ SELECT t.expect_count('no API role can ask, decide or read the trail',
     WHERE has_table_privilege(r, 'memory.approvals', 'SELECT')
        OR has_table_privilege(r, 'memory.approval_requests', 'SELECT')
        OR has_function_privilege(r, 'memory.request_approval(uuid)', 'EXECUTE')
-       OR has_function_privilege(r, 'memory.record_approval(uuid, uuid, uuid, memory.approval_action, text)', 'EXECUTE')$$, 0);
+       OR has_function_privilege(r, 'memory.approval_review(uuid, uuid, uuid)', 'EXECUTE')
+       OR has_function_privilege(r, 'memory.issue_approval_challenge(uuid, uuid, uuid, memory.approval_action, text, integer)', 'EXECUTE')
+       OR has_function_privilege(r, 'memory.decide_approval_challenge(uuid, uuid, uuid, text)', 'EXECUTE')$$, 0);

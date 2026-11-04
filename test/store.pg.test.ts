@@ -362,7 +362,7 @@ describe("postgres store", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
     assert.equal(JSON.parse(viaTool.content[0].text).approval_state, "pending");
     assert.equal(typeof (store as unknown as Record<string, unknown>).recordApproval, "undefined");
 
-    // A person's decision, recorded the way memory.record_approval records it,
+    // A person's decision, recorded the way memory.decide_approval_challenge records it,
     // shows on fetch as who decided and when, never the digest or sign-in.
     const c = await admin.connect();
     try {
@@ -377,11 +377,16 @@ describe("postgres store", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
       const sess = randomBytes(32);
       await c.query("INSERT INTO memory.human_sign_ins_used (session_hash, actor_id, purpose) VALUES ($1, $2, 'approve')",
         [sess, h.rows[0].id]);
+      const ch = await c.query<{ id: string }>(
+        `INSERT INTO memory.approval_challenges (actor_id, namespace_id, memory_id, memory_version, content_sha256,
+           action, authority_id, secret_sha256, sign_in_hash, expires_at)
+         VALUES ($1, $2, $3, 1, $4, 'approve', $5, $6, $7, now() + interval '10 minutes') RETURNING id`,
+        [h.rows[0].id, ns.rows[0].id, m.id, ns.rows[0].sha, a.rows[0].id, randomBytes(32), sess]);
       await c.query(
         `INSERT INTO memory.approvals (memory_id, namespace_id, action, scope, claim_type, content_sha256,
-           decided_by_actor_id, authority_id, request_id, sign_in_hash)
-         VALUES ($1, $2, 'approve', 'cell_knowledge', 'decision', $3, $4, $5, $6, $7)`,
-        [m.id, ns.rows[0].id, ns.rows[0].sha, h.rows[0].id, a.rows[0].id, asked.request_id, sess]);
+           decided_by_actor_id, authority_id, request_id, sign_in_hash, challenge_id)
+         VALUES ($1, $2, 'approve', 'cell_knowledge', 'decision', $3, $4, $5, $6, $7, $8)`,
+        [m.id, ns.rows[0].id, ns.rows[0].sha, h.rows[0].id, a.rows[0].id, asked.request_id, sess, ch.rows[0].id]);
       await c.query("UPDATE memory.memories SET approval_state = 'approved' WHERE id = $1", [m.id]);
       await c.query("COMMIT");
     } catch (err) {

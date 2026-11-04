@@ -218,8 +218,15 @@ here so they are known:
 now carries PR 41's fixes, and in line with L5 its approval records also refuse
 truncation by any role. Local verification on that revision: database suite
 484 checks plus the two race checks passed, unit tests 77 passed, store and database tests 90 passed,
-typecheck clean. It needs a fresh review on its new head, and is held until
-PR 41 merges before it is retargeted to main.
+typecheck clean. After PR 41 merged it was retargeted to main, with
+final head `9419f07`. On that head every GitHub check passed (test, db,
+gte-small, secrets, analyze, CodeQL), GitHub reports it mergeable and clean,
+and there are no review comments. A security review was requested from Codex on
+`9419f07`, naming approval requests and decisions, the trust guard, sign-in
+binding, namespace scope and the admin view. Codex reviewed `9419f07` and
+reported no major issues. Codex's separate security-review record stays empty
+on every PR in this repository, so this rests on its review of that head after
+the security request. PR 42 is held for the founder's merge decision.
 
 **Merge decisions.** The review found issues on PR 41's first version, so the
 fixes went back to the founder before any merge. On the founder's yes, PR 41

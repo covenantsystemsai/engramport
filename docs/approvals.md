@@ -19,7 +19,8 @@ a memory, a field or a tool argument that a writer sets. So:
   from 0009): signed in with Google, within the last 15 minutes, on an email that
   maps to exactly one enabled human actor through an unrevoked membership.
 - Each sign-in does **one** authority act (accept, approve, delegate or revoke), then
-  is recorded as spent. A second act needs a new sign-in. A sign-in used to
+  is recorded as spent. For a decision on a memory, the sign-in is also bound
+  to one challenge for one named action on one exact version (0018). A second act needs a new sign-in. A sign-in used to
   connect a client (the OAuth flow) is spent for authority acts too, and one
   already spent on an authority act can't connect a client. The sign-in is
   recorded by a hash of its session id, never the id itself.
@@ -40,9 +41,9 @@ a memory, a field or a tool argument that a writer sets. So:
 | 4 | Agents propose and recommend, never approve or impersonate a person | Authority is human-only; a decision needs a human sign-in; agents can only ask; the trust guard refuses every other change (0014, 0015, 0016) |
 | 5 | Tower and city promotion needs separate AN2B governance approval | `promotion` authority, only on a tower or city; every tower or city memory needs it, and it approves nothing in a cell (0015, 0016) |
 | 6 | Engineering, security, financial and deployment approvals stay separate | EngramPort records memory approvals only. No scope here covers anything else |
-| 7 | Approval binds to the exact memory id, version, content digest, action and namespace | `memory.approvals` (0016). Each version is its own memory row, so the id pins the version |
-| 8 | A changed or superseded memory needs fresh approval | A change is a new version with a new id and digest, which starts at `none` (0014). Deciding checks it is still the active version and the digest matches (0016) |
-| 9 | Revoked authority invalidates future approvals and stops reuse | Validity is checked up the whole chain at the moment of use: unrevoked, unexpired, accepted, enabled humans. Revoking an owner ends every delegation from it (0015, 0017) |
+| 7 | Approval binds to the exact memory id, version, content digest, action and namespace | A single-use challenge bound to the approver, namespace, action, memory id, version, digest, authority, sign-in and expiry, consumed with the decision (0018) |
+| 8 | A changed or superseded memory needs fresh approval | A change is a new version with a new id and digest, which starts at `none` (0014). A challenge dies if the memory is superseded, retracted, re-versioned or decided by someone else before it is used (0018) |
+| 9 | Revoked authority invalidates future approvals and stops reuse | Validity is checked up the whole chain at the moment of use: unrevoked, unexpired, accepted, enabled humans. Revoking an owner ends every delegation from it. An unused challenge dies with its authority, and a revocation racing a decision is seen (0015, 0017, 0018) |
 | 10 | Full audit provenance, no content for content-blind admins | Authorities, requests and decisions carry ids, actors, namespaces, scopes and times. The admin reads those, never memory text, digest or sign-in (0015, 0016) |
 
 ## What is built
@@ -79,7 +80,8 @@ a memory, a field or a tool argument that a writer sets. So:
   `pending`. Asking again returns the same request. Agents reach it through the
   `request_approval` tool, which asks and nothing more.
 - `memory.record_approval(user, session, memory_id, approve|reject, sha256)`:
-  a person decides on one memory version. It takes their fresh, single-use
+  a person decided on one memory version. 0018 replaces it with the challenge
+  steps below; the checks it made are kept along that path. It takes their fresh, single-use
   sign-in and the digest of the text they were shown. Someone with no authority
   gets the same answer whether or not the memory exists. Then the memory must
   still be the active version, not decided yet, and match the digest.
@@ -139,9 +141,44 @@ This closes I7: the admin can still create a person and offer them authority,
 but nothing counts until that person signs in with their own Google account and
 accepts it. The acceptance page itself is part of the approval page below.
 
+**Migration 0018 (D-03B, approval challenges)**
+
+Founder decision D-03B: each decision binds to an exact, single-use
+authorization challenge, with fresh human authentication and explicit review.
+A decision takes three calls, all with the approver's same fresh sign-in:
+
+1. `memory.approval_review(user, session, memory_id)` shows the memory the
+   approver may decide on: its text, digest, version, namespace and scope.
+   Nothing is spent or recorded. Someone with no authority gets the same answer
+   whether or not the memory exists.
+2. `memory.issue_approval_challenge(user, session, memory_id, action, sha256, version)`
+   takes the digest and version the approver was shown and the action they
+   picked. It records a challenge bound to the approver, namespace, action,
+   memory id, version, digest, the authority it is issued under, the sign-in
+   and a ten-minute expiry, and returns a 256-bit secret once. Only the
+   secret's hash is kept. One sign-in takes one challenge.
+3. `memory.decide_approval_challenge(user, session, challenge_id, secret)`
+   spends the sign-in and the challenge together, once. Someone else, another
+   sign-in of the same person, a wrong secret and no challenge all get the
+   same answer. It is refused if the challenge expired or was used, if the
+   memory was superseded, retracted, given a new version or already decided,
+   or if the authority, any authority above it, or a holder is no longer
+   valid. The authority chain and its holders are held still while it
+   decides, so a revocation racing the decision is seen. Once everything is
+   locked, the challenge's expiry and the authorities' expiry are checked again
+   against the wall clock, so neither a long transaction nor a wait for a lock
+   lets a challenge or an authority be used after its deadline.
+
+`memory.record_approval` is removed, so there is no other way to decide.
+Challenges are records that no role changes or deletes. The admin sees who took
+which challenge, for which memory and action, under which authority, when it
+expires and whether it was used, never the text, digest, secret or sign-in.
+The server can only call the three steps. This closes L6: a sign-in used for a
+decision is tied to one named act.
+
 **Next: the approval page.** A small page where the person signs in with
 Google in their own browser, sees the memory, and approves or rejects it. It
-calls `record_approval` with that sign-in and the digest of what it showed. It
+runs the three challenge steps with that sign-in. It
 is deliberately a page and not an MCP tool, so an agent holding the person's
 connection still can't approve.
 
@@ -178,7 +215,7 @@ open for the founder.
 | L3 | Two emails mapped to one human actor could each act as that person | Low | Fixed. An actor reachable from more than one email can't use authority |
 | L4 | A claim type list could hold a blank, or be empty | Low | Fixed by a check on the column |
 | L5 | The table owner could delete or truncate authority and sign-in records | Low | Fixed. Delete and truncate are refused for every role |
-| L6 | A sign-in isn't tied to the act it was taken for, and a refused act doesn't spend it | Low | Open, by design for now. Any act still needs the holder's own fresh Google sign-in and valid authority. The approval page should take one sign-in for one named act |
+| L6 | A sign-in isn't tied to the act it was taken for, and a refused act doesn't spend it | Low | Closed for decisions by D-03B (0018): a decision's sign-in is bound to one challenge for one named act. A refused decision still doesn't spend it, but the challenge can't be retried with another act |
 | C1 | Codex on `7fb145e`: the M2 fix had a race. A connect and an authority act using the same sign-in at the same moment could both succeed | Medium | Fixed. Connecting now records the sign-in first and then checks how it was used, so the second of two racing uses always fails. A two-session test proves it, and fails on the earlier code |
 | I7 | The admin role can create a human actor, give it a membership and grant it authority, so the admin can make an approver | Info | Founder decided D-03A: the grantee must accept with their own sign-in. Built in 0017 |
 

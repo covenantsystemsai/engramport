@@ -480,6 +480,25 @@ describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABA
     assert.match(out[0], /revoked .* \(owner_left\)$/);
   });
 
+  test("the approval trail shows who asked, where and when, and never the text", async () => {
+    const k = await admin.mintKey({ namespace: cell, actor: `claude-${run}` });
+    const text = `Secret pricing rule for approval ${run}`;
+    const m = await store.remember(k.key, { content: text, kind: "decision", claimType: "decision" });
+    await store.requestApproval(k.key, m.id);
+    const rows = await admin.listApprovals({ namespace: city, sinceMs: 3_600_000 });
+    const mine = rows.filter((r) => r.memory_id === m.id);
+    assert.deepEqual(mine.map((r) => [r.event, r.namespace, r.actor]), [["requested", cell, `claude-${run}`]]);
+    await refused(admin.listApprovals({ limit: 0 }), /limit/);
+
+    const out: string[] = [];
+    const io = { out: (l: string) => out.push(l), err: () => undefined };
+    const open = () => new AdminClient(new pg.Pool({ connectionString: urlAs(opsRole, "ops-test-only") }), pepper);
+    assert.equal(await runAdmin(["approval", "list", "--namespace", cell], open, io), 0);
+    const line = out.find((l) => l.includes(m.id))!;
+    assert.match(line, new RegExp(`  requested  ${cell}  memory ${m.id}  by claude-${run}$`));
+    assert.ok(!out.join("\n").includes("Secret pricing"), "no memory text in the trail");
+  });
+
   test("the command line prints a minted key alone on stdout", async () => {
     const out: string[] = [];
     const err: string[] = [];

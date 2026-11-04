@@ -336,6 +336,70 @@ describe("postgres store", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
     assert.equal(JSON.parse(good.content[0].text).claim_type, "inference");
   });
 
+  test("an agent can ask for approval but never approve, and fetch shows the trail", async () => {
+    const m = await store.remember(keys.cell1, { content: `Returns are accepted for 30 days ${run}`, kind: "decision", claimType: "decision" });
+    const asked = await store.requestApproval(keys.cell1, m.id);
+    assert.equal(asked.approval_state, "pending");
+    assert.equal((await store.requestApproval(keys.cell1b, m.id)).request_id, asked.request_id, "asking twice is one request");
+    let { memory } = await store.fetch(keys.cell1, m.id);
+    assert.equal(memory.approval_state, "pending");
+    assert.equal(memory.approval?.requested_by, `claude-${run}`);
+    assert.equal(memory.approval?.decision, undefined);
+
+    await fails(store.requestApproval(keys.readonly, m.id), "forbidden");
+    await fails(store.requestApproval(keys.cell2, m.id), "not_found");
+    const inherited = await store.recall(keys.cell1, { query: "invoices first business day", mode: "keyword" });
+    const towerId = inherited.results.find((x) => x.inherited)!.id;
+    await fails(store.requestApproval(keys.cell1, towerId), "forbidden");
+    await fails(store.requestApproval(keys.cell1, "not-an-id"), "invalid");
+    await fails(store.requestApproval(keys.cell1, m.id, paths.cell2), "forbidden");
+    const gone = await store.remember(keys.cell1, { content: `Stored in error ${run}` });
+    await store.retract(keys.cell1, gone.id);
+    await fails(store.requestApproval(keys.cell1, gone.id), "conflict");
+
+    // The tool takes no approval of any kind: asking is all it does.
+    const viaTool = await executeStoreTool("request_approval", { memory_id: m.id, approve: true }, store, keys.cell1);
+    assert.equal(JSON.parse(viaTool.content[0].text).approval_state, "pending");
+    assert.equal(typeof (store as unknown as Record<string, unknown>).recordApproval, "undefined");
+
+    // A person's decision, recorded the way memory.record_approval records it,
+    // shows on fetch as who decided and when, never the digest or sign-in.
+    const c = await admin.connect();
+    try {
+      await c.query("BEGIN");
+      const h = await c.query<{ id: string }>(
+        "INSERT INTO memory.actors (kind, slug, display_name) VALUES ('human', $1, 'Owner') RETURNING id", [`owner-${run}`]);
+      const ns = await c.query<{ id: string; sha: string }>(
+        "SELECT namespace_id AS id, content_sha256 AS sha FROM memory.memories WHERE id = $1", [m.id]);
+      const a = await c.query<{ id: string }>(
+        `INSERT INTO memory.approval_authorities (actor_id, namespace_id, scope) VALUES ($1, $2, 'cell_knowledge') RETURNING id`,
+        [h.rows[0].id, ns.rows[0].id]);
+      const sess = randomBytes(32);
+      await c.query("INSERT INTO memory.human_sign_ins_used (session_hash, actor_id, purpose) VALUES ($1, $2, 'approve')",
+        [sess, h.rows[0].id]);
+      await c.query(
+        `INSERT INTO memory.approvals (memory_id, namespace_id, action, scope, claim_type, content_sha256,
+           decided_by_actor_id, authority_id, request_id, sign_in_hash)
+         VALUES ($1, $2, 'approve', 'cell_knowledge', 'decision', $3, $4, $5, $6, $7)`,
+        [m.id, ns.rows[0].id, ns.rows[0].sha, h.rows[0].id, a.rows[0].id, asked.request_id, sess]);
+      await c.query("UPDATE memory.memories SET approval_state = 'approved' WHERE id = $1", [m.id]);
+      await c.query("COMMIT");
+    } catch (err) {
+      await c.query("ROLLBACK");
+      throw err;
+    } finally {
+      c.release();
+    }
+    ({ memory } = await store.fetch(keys.cell1, m.id));
+    assert.equal(memory.approval_state, "approved");
+    assert.deepEqual([memory.approval?.decision, memory.approval?.decided_by, memory.approval?.scope],
+      ["approved", `owner-${run}`, "cell_knowledge"]);
+    assert.deepEqual(Object.keys(memory.approval ?? {}).sort(), ["decided_at", "decided_by", "decision", "requested_at", "requested_by", "scope"]);
+    await fails(store.requestApproval(keys.cell1, m.id), "conflict");
+    const plain = await store.remember(keys.cell1, { content: `Never put up for approval ${run}` });
+    assert.equal((await store.fetch(keys.cell1, plain.id)).memory.approval, undefined);
+  });
+
   test("expected_version refuses a write that would replace a version it didn't see", async () => {
     const v1 = await store.remember(keys.cell1, { content: "Office opens at 8", dedupKey: "office-hours", expectedVersion: "none" });
     await fails(store.remember(keys.cell1, { content: "Office opens at 7", dedupKey: "office-hours", expectedVersion: "none" }), "conflict");

@@ -146,6 +146,8 @@ export async function executeStoreTool(
         return ok(await store.fetch(key, args.memory_id as string, namespace));
       case "delete_memory":
         return ok(await store.retract(key, args.memory_id as string, namespace));
+      case "request_approval":
+        return ok(await store.requestApproval(key, args.memory_id as string, namespace));
       case "list_namespaces":
         return ok(await store.listNamespaces(key));
       case "inspect":

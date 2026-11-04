@@ -142,6 +142,17 @@ export interface AuthorityRow {
   valid: boolean;
 }
 
+/** One step of the approval trail. Ids and names only: no text, digest or sign-in. */
+export interface ApprovalEventRow {
+  at: Date;
+  event: "requested" | "approved" | "rejected";
+  namespace: string;
+  memory_id: string;
+  actor: string;
+  scope: string | null;
+  authority_id: string | null;
+}
+
 export interface MintedKey {
   key: string;
   prefix: string;
@@ -778,6 +789,36 @@ export class AdminClient {
     });
   }
 
+  /** Who asked for approval and who decided, newest first. Never memory content. */
+  async listApprovals(opts: { namespace?: string; sinceMs?: number; limit?: number } = {}): Promise<ApprovalEventRow[]> {
+    if (opts.namespace) checkPath(opts.namespace);
+    const limit = opts.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new AdminError("--limit is 1 to 1000");
+    const since = opts.sinceMs === undefined ? null : new Date(Date.now() - opts.sinceMs);
+    return this.tx(async (c) =>
+      (await c.query<ApprovalEventRow>(
+        `SELECT * FROM (
+           SELECT r.created_at AS at, 'requested' AS event, n.path AS namespace, r.memory_id, a.slug AS actor,
+                  NULL::text AS scope, NULL::uuid AS authority_id
+           FROM memory.approval_requests r
+           JOIN memory.namespaces n ON n.id = r.namespace_id
+           JOIN memory.actors a ON a.id = r.requested_by_actor_id
+           UNION ALL
+           SELECT d.decided_at, CASE d.action WHEN 'approve' THEN 'approved' ELSE 'rejected' END, n.path, d.memory_id,
+                  a.slug, d.scope::text, d.authority_id
+           FROM memory.approvals d
+           JOIN memory.namespaces n ON n.id = d.namespace_id
+           JOIN memory.actors a ON a.id = d.decided_by_actor_id
+         ) e
+         WHERE ($1::text IS NULL OR e.namespace = $1 OR starts_with(e.namespace, $1 || '/'))
+           AND ($2::timestamptz IS NULL OR e.at >= $2)
+         ORDER BY e.at DESC, e.event
+         LIMIT $3`,
+        [opts.namespace ?? null, since, limit],
+      )).rows,
+    );
+  }
+
   /** Connections people approved: which client, as which member, and whether it still works. */
   async listConnections(opts: { namespace?: string; email?: string; includeRevoked?: boolean } = {}): Promise<ConnectionRow[]> {
     if (opts.namespace) checkPath(opts.namespace);
@@ -931,8 +972,12 @@ export const ADMIN_USAGE = `Usage: engramport admin <command>
                                      money or deploy approval lives here.
   authority list [--namespace <path>] [--actor <name>] [--all]
   authority revoke <id> --reason <code>
+                                     ends it and every delegation made from it;
                                      the reason is a short code such as owner_left
-                                     ends it and every delegation made from it
+  approval list [--namespace <path>] [--since 7d] [--limit 100]
+                                     who asked for approval and who approved or
+                                     rejected which memory, where, under which
+                                     authority. Never the text or its digest.
   connection list [--namespace <path>] [--email <email>] [--all]
   connection revoke <id>             ends one connection and its tokens; the
                                      membership stays, so they can connect again
@@ -1250,6 +1295,21 @@ export async function runAdmin(argv: string[], open: () => AdminClient, io: Admi
             + `${a.can_delegate ? "  can delegate" : ""}  ${from}  ${state}`);
         }
         if (!rows.length) io.err(flags.all ? "No approval authorities." : "No active approval authorities. Add --all to include revoked ones.");
+        return 0;
+      }
+      case "approval list": {
+        const { positional, flags } = parseFlags(rest, { namespace: "value", since: "value", limit: "value" });
+        if (positional.length) throw new UsageError(`unexpected argument ${positional[0]}`);
+        const rows = await db().listApprovals({
+          namespace: typeof flags.namespace === "string" ? flags.namespace : undefined,
+          sinceMs: typeof flags.since === "string" ? parseDuration(flags.since) : undefined,
+          limit: typeof flags.limit === "string" ? Number(flags.limit) : undefined,
+        });
+        for (const e of rows) {
+          io.out(`${when(e.at)}  ${e.event}  ${e.namespace}  memory ${e.memory_id}  by ${e.actor}`
+            + `${e.scope ? `  ${e.scope} under ${e.authority_id}` : ""}`);
+        }
+        if (!rows.length) io.err("No approval requests or decisions.");
         return 0;
       }
       case "authority revoke": {

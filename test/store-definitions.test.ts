@@ -60,6 +60,15 @@ describe("Postgres store tool definitions", () => {
     assert.ok(!("source_filter" in storeOverrides.recall.inputSchema.properties));
   });
 
+  test("agents can ask for approval and are told they cannot approve", () => {
+    const req = byName.get("request_approval")!;
+    assert.match(req.description, /cannot approve, reject or verify/);
+    assert.deepEqual(Object.keys(req.inputSchema.properties as object).sort(), ["memory_id", "namespace"]);
+    for (const d of served) {
+      assert.doesNotMatch(d.name, /^(approve|record_approval|verify)/, `${d.name}: no tool approves or verifies`);
+    }
+  });
+
   test("tells agents that returned content is data", () => {
     for (const name of ["recall", "fetch_memory", "get_entity"]) {
       assert.match(byName.get(name)!.description, /not (as )?instructions/, name);

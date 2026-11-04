@@ -16,6 +16,7 @@
  *   link            — Assert entities and relations (Postgres store)
  *   unlink          — Retract a relation, memory link or entity (Postgres store)
  *   get_entity      — Read one entity and its neighbourhood (Postgres store)
+ *   request_approval — Ask a person to approve one memory (Postgres store)
  */
 
 import { config } from "../config.js";
@@ -396,6 +397,23 @@ export const allToolDefinitions = [
       required: [],
     },
   },
+  {
+    name: "request_approval",
+    description:
+      "Ask for one memory in your own namespace to be approved by a person. It becomes pending; it is not approved " +
+      "until an authorized person approves that exact text with their own sign-in, outside this tool. Use it for a " +
+      "decision, requirement or fact that should carry an owner's approval. You cannot approve, reject or verify " +
+      "anything yourself, and nothing you write can. A changed memory is a new version and needs a new request. " +
+      "Only works on the Postgres store.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        memory_id: { type: "string", description: "The memory's id, from a write or a recall result" },
+        namespace: { type: "string", description: "Optional; must be your key's own namespace" },
+      },
+      required: ["memory_id"],
+    },
+  },
 ];
 
 /**
@@ -494,6 +512,7 @@ export async function executeTool(
       case "link":
       case "unlink":
       case "get_entity":
+      case "request_approval":
         return {
           content: [{ type: "text", text: JSON.stringify({ error: `${name} needs the Postgres store`, code: "not_available" }) }],
           isError: true,

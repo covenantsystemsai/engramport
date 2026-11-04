@@ -694,7 +694,8 @@ export class PostgresStore {
       PostgresStore.checkNamespace(ctx, namespace);
       const r = await c.query<Row>(`SELECT ${MEMORY_COLUMNS} FROM memory.memories m ${MEMORY_JOINS} WHERE m.id = $1`, [id]);
       if (!r.rows[0]) throw new StoreError("not_found", "memory not found");
-      return { note: UNTRUSTED_NOTE, memory: present(r.rows[0], ctx) };
+      const approval = await PostgresStore.approvalTrail(c, id);
+      return { note: UNTRUSTED_NOTE, memory: { ...present(r.rows[0], ctx), ...(approval ? { approval } : {}) } };
     });
   }
 
@@ -723,6 +724,61 @@ export class PostgresStore {
       }
       return { id, retracted: true, already: true };
     });
+  }
+
+  /**
+   * Ask for a memory in the key's own namespace to be approved by a person.
+   * It becomes pending; only a person's own sign-in can approve it, and never
+   * through a key. Asking again for a pending memory returns the same request.
+   */
+  async requestApproval(rawKey: string, id: string, namespace?: string) {
+    if (typeof id !== "string" || !UUID.test(id)) throw new StoreError("invalid", "memory_id is not a valid id");
+    return this.withKey(rawKey, async (c, ctx) => {
+      PostgresStore.checkNamespace(ctx, namespace);
+      PostgresStore.requireWrite(ctx);
+      try {
+        const r = await c.query<{ request_id: string }>("SELECT memory.request_approval($1) AS request_id", [id]);
+        return {
+          id,
+          request_id: r.rows[0].request_id,
+          approval_state: "pending",
+          note: "A person with approval authority decides, through their own sign-in. Nothing is approved yet.",
+        };
+      } catch (err) {
+        const e = err as { code?: string; message?: string };
+        if (e.code === "P0002") throw new StoreError("not_found", "memory not found");
+        if (e.code === "42501") throw new StoreError("forbidden", e.message ?? "forbidden");
+        if (e.code === "55000") throw new StoreError("conflict", e.message ?? "conflict");
+        throw err;
+      }
+    });
+  }
+
+  /**
+   * The approval trail for one memory the key can read: who asked, and who
+   * decided, what and when. Never the digest or the sign-in.
+   */
+  private static async approvalTrail(c: pg.PoolClient, id: string) {
+    const r = await c.query<{ requested_at: Date | null; requested_by: string | null; action: string | null;
+                              decided_by: string | null; decided_at: Date | null; scope: string | null }>(
+      `SELECT rq.created_at AS requested_at, ra.slug AS requested_by,
+              ap.action::text AS action, da.slug AS decided_by, ap.decided_at, ap.scope::text AS scope
+       FROM (SELECT $1::uuid AS memory_id) x
+       LEFT JOIN memory.approval_requests rq ON rq.memory_id = x.memory_id
+       LEFT JOIN memory.actors ra ON ra.id = rq.requested_by_actor_id
+       LEFT JOIN memory.approvals ap ON ap.memory_id = x.memory_id
+       LEFT JOIN memory.actors da ON da.id = ap.decided_by_actor_id`,
+      [id],
+    );
+    const t = r.rows[0];
+    if (!t || (!t.requested_at && !t.decided_at)) return undefined;
+    return {
+      ...(t.requested_at ? { requested_by: t.requested_by, requested_at: t.requested_at.toISOString() } : {}),
+      ...(t.decided_at
+        ? { decision: t.action === "approve" ? "approved" : "rejected", decided_by: t.decided_by,
+            decided_at: t.decided_at.toISOString(), scope: t.scope }
+        : {}),
+    };
   }
 
   /** The key's namespace and the ones above it, with active memory counts. */

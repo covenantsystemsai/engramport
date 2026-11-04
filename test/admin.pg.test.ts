@@ -560,6 +560,46 @@ describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABA
     assert.ok(out.some((l) => l.includes(id) && l.includes("3 memories") && l.includes("1 links")));
   });
 
+  test("the admin sees delegated grants and can revoke one, and nothing more", async () => {
+    const ns = (await superPool.query<{ id: string }>("SELECT id FROM memory.namespaces WHERE path = $1", [cell])).rows[0].id;
+    const human = async (slug: string) => (await superPool.query<{ id: string }>(
+      "INSERT INTO memory.actors (kind, slug, display_name) VALUES ('human', $1, $1) RETURNING id", [slug])).rows[0].id;
+    const owner = await human(`grantor-${run}`);
+    const helper = await human(`helper-${run}`);
+    const parent = (await superPool.query<{ id: string }>(
+      "INSERT INTO memory.approval_authorities (actor_id, namespace_id, scope, can_delegate) VALUES ($1, $2, 'cell_knowledge', true) RETURNING id",
+      [owner, ns])).rows[0].id;
+    const id = (await superPool.query<{ id: string }>(
+      `INSERT INTO memory.data_grants (namespace_id, power, actor_id, granted_by_actor_id, parent_authority_id, expires_at)
+       VALUES ($1, 'export', $2, $3, $4, now() + interval '7 days') RETURNING id`, [ns, helper, owner, parent])).rows[0].id;
+    const listed = (await admin.listDataGrants({ namespace: city })).find((g) => g.id === id)!;
+    assert.deepEqual([listed.power, listed.holder, listed.granted_by, listed.state, listed.valid],
+      ["export", `helper-${run}`, `grantor-${run}`, "waiting", false]);
+    await refused(admin.revokeDataGrant(id, "Not A Code"), /short code/);
+    const out: string[] = [];
+    const io = { out: (l: string) => out.push(l), err: () => undefined };
+    const open = () => new AdminClient(new pg.Pool({ connectionString: urlAs(opsRole, "ops-test-only") }), pepper);
+    assert.equal(await runAdmin(["grant", "list", "--namespace", cell], open, io), 0);
+    assert.ok(out.some((l) => l.includes(id) && l.includes("waiting")));
+    assert.equal(await runAdmin(["grant", "revoke", id, "--reason", "audit_finding"], open, io), 0);
+    assert.match(out.at(-1)!, /can no longer export/);
+    await refused(admin.revokeDataGrant(id, "again"), /already revoked/);
+    assert.equal((await admin.listDataGrants({ namespace: city })).some((g) => g.id === id), false, "ended grants are hidden");
+    const ended = (await admin.listDataGrants({ namespace: city, includeEnded: true })).find((g) => g.id === id)!;
+    assert.deepEqual([ended.state, ended.revoke_reason], ["revoked", "audit_finding"]);
+    const ops = new pg.Client({ connectionString: urlAs(opsRole, "ops-test-only") });
+    await ops.connect();
+    try {
+      await ops.query("SET ROLE engramport_admin");
+      await assert.rejects(ops.query("UPDATE memory.data_grants SET accepted_at = now() WHERE id = $1", [id]));
+      await assert.rejects(ops.query(
+        "SELECT memory.grant_data_power(gen_random_uuid(), gen_random_uuid(), $1, $2, 'erase', now() + interval '1 day')",
+        [ns, helper]), /permission denied/);
+    } finally {
+      await ops.end();
+    }
+  });
+
   test("the approval trail shows who asked, where and when, and never the text", async () => {
     const k = await admin.mintKey({ namespace: cell, actor: `claude-${run}` });
     const text = `Secret pricing rule for approval ${run}`;

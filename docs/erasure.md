@@ -42,7 +42,7 @@ Founder decision D-02, decided Nov 4:
 | Admin ledger: `engramport admin erasure list` | Built |
 | The owner's page to review and confirm: `/erase/<request id>` | Built, off unless `ENGRAMPORT_ERASURE_PAGE=true` |
 | Export by an owner: `/export` | Built, off unless `ENGRAMPORT_EXPORT_PAGE=true`; see Export below |
-| Delegated erasure; export grants | To build |
+| Delegated erase and export grants | Built in the database (`0024_data_grants.sql`); the page where owners give them and holders accept them is next |
 | Whole-cell erasure with a second confirmer | To build |
 | 30-day retraction recovery window | To build |
 
@@ -191,3 +191,30 @@ never what was in it, and can't export.
 
 The page is off unless `ENGRAMPORT_EXPORT_PAGE=true`, which needs OAuth set up
 and `<public URL>/export/callback` in Supabase's redirect URLs.
+
+## Delegated grants
+
+An owner can give one other person the power to erase in, or to export, one
+namespace (D-02 item 2 and D-02.4). The database side is
+`db/migrations/0024_data_grants.sql`; its tests are `db/test/grants_test.sql`.
+
+- **Who gives one.** A person holding a direct, unrestricted owner's grant over
+  the namespace that allows delegation, with a fresh sign-in
+  (`memory.grant_data_power`). Approval delegates, owners limited to some claim
+  types, agents and the admin can't.
+- **To whom.** Another enabled person who is a member of that namespace. One
+  power, one namespace (not those under it), ending within 90 days.
+- **Accepting.** The person sees the grant's exact terms and accepts or rejects
+  them with their own fresh sign-in, against a fingerprint of those terms
+  (`memory.pending_data_grants`, `memory.decide_data_grant`). Until then it
+  counts for nothing.
+- **When it stops counting.** At once when revoked (by the owner who gave it,
+  another owner who could give it, or the admin with `engramport admin grant
+  revoke`), when it expires, when the owner's own authority stops being valid,
+  or when the person is disabled or leaves the namespace. A decision already
+  under way is refused if the grant stops counting before it completes.
+- **The record.** An erasure or export done under a grant records both the
+  grant and the owner's authority it rests on, and who decided.
+
+The page where owners give grants and holders accept them is the next step;
+until then these are database functions only, like approval delegation.

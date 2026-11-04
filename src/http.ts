@@ -34,6 +34,8 @@ export interface HttpAppOptions {
   deps?: McpDeps;
   /** OAuth routes (createOAuthRouter), served without a key. */
   oauth?: Router;
+  /** The approval page (createApprovalRouter), served without a key. */
+  approve?: Router;
   /** RFC 9728 metadata URL named in every 401, so clients can start sign-in. */
   resourceMetadataUrl?: string;
   /** Checks a key before any route runs: false means unknown, revoked or expired. */
@@ -85,6 +87,7 @@ export function createHttpApp(opts: HttpAppOptions): express.Express {
   });
 
   if (opts.oauth) app.use(opts.oauth);
+  if (opts.approve) app.use(opts.approve);
 
   const challenge = (error?: string) =>
     [

@@ -123,3 +123,19 @@ test("oauth: off by default; when on it needs postgres, http mode, an https publ
   assert.match(configProblems(pg({ ...on, ENGRAMPORT_SUPABASE_PUBLISHABLE_KEY: "" }), "http").join(" "), /PUBLISHABLE_KEY is not set/);
   assert.match(configProblems(pg({ ...on, ENGRAMPORT_SUPABASE_URL: "" }), "http").join(" "), /SUPABASE_URL is not set/);
 });
+
+test("approval page: off by default; when on it needs OAuth for its Google sign-in", () => {
+  const on = {
+    ENGRAMPORT_DATABASE_URL: "postgresql://engramport_app@db.example.com:5432/postgres",
+    ENGRAMPORT_OAUTH: "true",
+    ENGRAMPORT_PUBLIC_URL: "https://mcp.example.com",
+    ENGRAMPORT_SUPABASE_URL: "https://ref.supabase.co",
+    ENGRAMPORT_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test",
+  };
+  assert.equal(resolveConfig(env({})).approvalPage, false);
+  assert.deepEqual(configProblems(pg({ ...on, ENGRAMPORT_APPROVAL_PAGE: "true" }), "http"), []);
+  assert.match(configProblems(pg({ ...on, ENGRAMPORT_OAUTH: "", ENGRAMPORT_APPROVAL_PAGE: "true" }), "http").join(" "),
+    /APPROVAL_PAGE needs ENGRAMPORT_OAUTH=true/);
+  assert.match(configProblems(resolveConfig(env({ ENGRAMPORT_APPROVAL_PAGE: "true", ENGRAMPORT_API_URL: "https://api.example.com" })), "http")[0],
+    /APPROVAL_PAGE needs ENGRAMPORT_STORE=postgres/);
+});

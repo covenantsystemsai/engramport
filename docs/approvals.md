@@ -176,11 +176,32 @@ expires and whether it was used, never the text, digest, secret or sign-in.
 The server can only call the three steps. This closes L6: a sign-in used for a
 decision is tied to one named act.
 
-**Next: the approval page.** A small page where the person signs in with
-Google in their own browser, sees the memory, and approves or rejects it. It
-runs the three challenge steps with that sign-in. It
-is deliberately a page and not an MCP tool, so an agent holding the person's
-connection still can't approve.
+**The approval page (D-03B, `src/approve.ts`)**
+
+Off unless `ENGRAMPORT_APPROVAL_PAGE=true`, which needs OAuth. Not deployed
+anywhere. It is deliberately a page and not an MCP tool, so an agent holding a
+person's connection can ask for approval but can't approve.
+
+1. `GET /approve/<memory id>` starts a fresh Google sign-in for this visit.
+2. Back from Supabase Auth, the page runs `approval_review` and shows the
+   memory: namespace, kind and claim type, version, when it was written and
+   asked about, its fingerprint and its full text. It offers Approve, Reject
+   or Not now. A memory already decided or no longer active shows why, with no
+   buttons. Someone with no authority sees the same page as for a memory that
+   doesn't exist.
+3. Picking an action takes the challenge for that action on that exact
+   version, and shows the memory again with "Approve it" or "Reject it" and
+   "Go back without deciding".
+4. Confirming spends the challenge and the sign-in. The page then ends the
+   Supabase session.
+
+The visit is carried in an encrypted, signed, ten-minute `__Host-` cookie
+(HttpOnly, Secure, SameSite=Lax) under a key of its own. The challenge's secret
+is only ever in that cookie, never in the page. Each form carries a token tied
+to the cookie. The page loads no scripts, can't be framed, posts only to itself
+and is never cached. A refusal shows the database's own words, so a changed
+memory, a revoked authority or a replayed confirmation says what happened and
+records nothing.
 
 ## The first pilot owner's scope, not yet provisioned
 

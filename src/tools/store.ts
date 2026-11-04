@@ -3,7 +3,8 @@
  *
  * remember, recall, upload, fetch_memory, delete_memory (which retracts),
  * list_namespaces and inspect run against the memory schema, and so do the
- * graph tools link, unlink and get_entity. chat, groom,
+ * graph tools link, unlink and get_entity, and supersede_memory and
+ * memory_history, which revise a memory by id and list its versions. chat, groom,
  * dream and export_graph need the graph and synthesis work that comes in later
  * PRs, so they answer with a clear error instead of reaching the old backend.
  */
@@ -148,6 +149,28 @@ export async function executeStoreTool(
         return ok(await store.retract(key, args.memory_id as string, namespace));
       case "request_approval":
         return ok(await store.requestApproval(key, args.memory_id as string, namespace));
+      case "supersede_memory": {
+        for (const field of ["approval_state", "verification_state", "approved", "verified"]) {
+          if (args[field] !== undefined) {
+            throw new StoreError("invalid", `${field} can't be set by a write; every new version starts unapproved and unverified`);
+          }
+        }
+        const metadata = args.metadata && typeof args.metadata === "object" && !Array.isArray(args.metadata)
+          ? (args.metadata as Record<string, unknown>)
+          : undefined;
+        return ok(await store.supersede(key, {
+          memoryId: args.memory_id as string,
+          content: args.content as string,
+          reason: args.reason as string,
+          kind: toKind(args.type),
+          claimType: args.claim_type as ClaimType | undefined,
+          metadata,
+          sourceUrl: str(args.source_url),
+          namespace,
+        }));
+      }
+      case "memory_history":
+        return ok(await store.history(key, args.memory_id as string, namespace));
       case "list_namespaces":
         return ok(await store.listNamespaces(key));
       case "inspect":

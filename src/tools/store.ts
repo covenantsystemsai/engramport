@@ -16,7 +16,7 @@ import { Embedder, openAIEmbedder, supabaseEmbedder } from "../embeddings.js";
 import { decodePepper } from "../keys.js";
 import type { LinkInput } from "../store/graph.js";
 import { NOT_ON_POSTGRES } from "./store-definitions.js";
-import { createPool, MEMORY_KINDS, MemoryKind, PostgresStore, RECALL_MODES, RecallMode, StoreError } from "../store/postgres.js";
+import { ClaimType, createPool, MEMORY_KINDS, MemoryKind, PostgresStore, RECALL_MODES, RecallMode, StoreError } from "../store/postgres.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 
@@ -97,9 +97,22 @@ export async function executeStoreTool(
         const metadata = args.metadata && typeof args.metadata === "object" && !Array.isArray(args.metadata)
           ? (args.metadata as Record<string, unknown>)
           : undefined;
+        // Approval and verification are recorded as their own events, never by the writer.
+        for (const field of ["approval_state", "verification_state", "approved", "verified"]) {
+          if (args[field] !== undefined) {
+            throw new StoreError("invalid", `${field} can't be set by a write; every new memory starts unapproved and unverified`);
+          }
+        }
+        // A malformed precondition must fail, never turn into an unconditional write.
+        const expectedVersion = args.expected_version;
+        if (expectedVersion !== undefined && expectedVersion !== null && (typeof expectedVersion !== "string" || !expectedVersion.trim())) {
+          throw new StoreError("invalid", 'expected_version must be a memory id or "none"');
+        }
         return ok(await store.remember(key, {
           content: args.content as string,
           kind: toKind(args.type),
+          claimType: args.claim_type as ClaimType | undefined,
+          expectedVersion: (expectedVersion as string | null | undefined) ?? undefined,
           metadata,
           dedupKey: str(args.dedup_key),
           sourceUrl: str(args.source_url),

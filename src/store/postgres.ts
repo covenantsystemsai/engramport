@@ -29,12 +29,15 @@ export type MemoryKind =
 export const MEMORY_KINDS: readonly MemoryKind[] = [
   "fact", "decision", "note", "summary", "insight", "principle", "hypothesis", "document_chunk",
 ];
+/** What a memory's writer claims it is. A claim, not a check: approval and verification are separate. */
+export type ClaimType = "observation" | "inference" | "hypothesis" | "proposal" | "decision" | "fact";
+export const CLAIM_TYPES: readonly ClaimType[] = ["observation", "inference", "hypothesis", "proposal", "decision", "fact"];
 export type Transport = "stdio" | "streamable_http" | "rest" | "job";
 /** hybrid (the default) blends vector, keyword and graph; the others run one retriever alone. */
 export type RecallMode = "hybrid" | "vector" | "keyword" | "graph";
 export const RECALL_MODES: readonly RecallMode[] = ["hybrid", "vector", "keyword", "graph"];
 
-export type StoreErrorCode = "unauthorized" | "forbidden" | "not_found" | "invalid";
+export type StoreErrorCode = "unauthorized" | "forbidden" | "not_found" | "invalid" | "conflict";
 
 /** An error that is safe to show the caller. Anything else is reported as a generic store error. */
 export class StoreError extends Error {
@@ -74,6 +77,13 @@ export interface RememberInput {
   kind?: MemoryKind;
   metadata?: Record<string, unknown>;
   dedupKey?: string;
+  /** What the writer claims this is (default: observation). */
+  claimType?: ClaimType;
+  /**
+   * With dedupKey: the id of the active version this write replaces, or "none"
+   * when no version should exist yet. Anything else is refused as a conflict.
+   */
+  expectedVersion?: string;
   sourceUrl?: string;
   importance?: number;
   /** If given, must be the key's own namespace. */
@@ -147,6 +157,12 @@ function checkContent(content: unknown): string {
   return content;
 }
 
+function checkClaimType(value: unknown): ClaimType | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!CLAIM_TYPES.includes(value as ClaimType)) throw new StoreError("invalid", `unknown claim type: ${String(value)}`);
+  return value as ClaimType;
+}
+
 function checkKind(kind: unknown): MemoryKind | undefined {
   if (kind === undefined || kind === null) return undefined;
   if (!MEMORY_KINDS.includes(kind as MemoryKind)) throw new StoreError("invalid", `unknown memory kind: ${String(kind)}`);
@@ -163,6 +179,9 @@ interface Row {
   created_at: Date;
   metadata: Record<string, unknown>;
   supersedes_id: string | null;
+  claim_type: ClaimType;
+  approval_state: string;
+  verification_state: string;
   score?: number;
   level?: string;
   depth?: number;
@@ -185,6 +204,8 @@ interface Row {
 // memories inherited from a tower or the city come back without it.
 const MEMORY_COLUMNS = `
   m.id, m.kind, m.content, m.status, m.created_at, m.metadata, m.supersedes_id, m.namespace_id,
+  m.claim_type::text AS claim_type, m.approval_state::text AS approval_state,
+  m.verification_state::text AS verification_state,
   n.path AS namespace,
   p.id AS provenance_id, a.slug AS written_by, p.tool, p.transport::text AS transport,
   p.source_kind, p.source_ref, p.request_id, p.created_at AS recorded_at`;
@@ -199,6 +220,9 @@ function present(row: Row, ctx: KeyContext) {
     kind: row.kind,
     content: row.content,
     status: row.status,
+    claim_type: row.claim_type,
+    approval_state: row.approval_state,
+    verification_state: row.verification_state,
     namespace: row.namespace,
     inherited: row.namespace_id !== ctx.namespaceId,
     ...(row.level !== undefined ? { level: row.level } : {}),
@@ -389,7 +413,8 @@ export class PostgresStore {
       `SELECT memory.remember(
          p_kind => $1::memory.memory_kind, p_content => $2, p_tool => $3,
          p_transport => $4::memory.transport, p_importance => $5::real, p_metadata => $6::jsonb,
-         p_dedup_key => $7, p_source_kind => $8, p_source_ref => $9, p_request_id => $10) AS id`,
+         p_dedup_key => $7, p_source_kind => $8, p_source_ref => $9, p_request_id => $10,
+         p_claim_type => $11::memory.claim_type) AS id`,
       [
         input.kind ?? "fact",
         input.content,
@@ -401,6 +426,7 @@ export class PostgresStore {
         input.sourceKind ?? null,
         input.sourceRef ?? null,
         currentRequestId() ?? null,
+        input.claimType ?? "observation",
       ],
     );
     return r.rows[0].id;
@@ -414,6 +440,14 @@ export class PostgresStore {
   async remember(rawKey: string, input: RememberInput) {
     const content = checkContent(input.content);
     const kind = checkKind(input.kind) ?? "fact";
+    const claimType = checkClaimType(input.claimType) ?? "observation";
+    const expected = input.expectedVersion;
+    if (expected !== undefined) {
+      if (!input.dedupKey) throw new StoreError("invalid", "expected_version needs a dedup_key");
+      if (expected !== "none" && !UUID.test(expected)) {
+        throw new StoreError("invalid", 'expected_version must be a memory id or "none"');
+      }
+    }
     if (input.importance !== undefined && !(input.importance >= 0 && input.importance <= 1)) {
       throw new StoreError("invalid", "importance must be between 0 and 1");
     }
@@ -430,12 +464,22 @@ export class PostgresStore {
         await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
           `engramport:dedup:${ctx.namespaceId}:${input.dedupKey}`,
         ]);
-        const cur = await c.query<{ id: string; content_sha256: string }>(
-          `SELECT id, content_sha256 FROM memory.memories
+        const cur = await c.query<{ id: string; content_sha256: string; claim_type: ClaimType }>(
+          `SELECT id, content_sha256, claim_type::text AS claim_type FROM memory.memories
            WHERE namespace_id = $1 AND dedup_key = $2 AND status = 'active' FOR UPDATE`,
           [ctx.namespaceId, input.dedupKey],
         );
-        if (cur.rows[0]?.content_sha256 === sha256Hex(content)) {
+        const active = cur.rows[0]?.id ?? null;
+        if (expected !== undefined && (expected === "none" ? active !== null : active?.toLowerCase() !== expected.toLowerCase())) {
+          throw new StoreError(
+            "conflict",
+            active
+              ? `the active version under this dedup_key is ${active}, not the one you expected; recall it and decide again`
+              : "there is no active version under this dedup_key, so nothing matches the one you expected",
+          );
+        }
+        // The same text with the same claim changes nothing; a new claim type is a new version.
+        if (cur.rows[0]?.content_sha256 === sha256Hex(content) && cur.rows[0].claim_type === claimType) {
           return { id: cur.rows[0].id, namespace: ctx.namespace, kind, unchanged: true };
         }
         if (cur.rows[0]) {
@@ -448,6 +492,7 @@ export class PostgresStore {
         ...input,
         content,
         kind,
+        claimType,
         sourceKind: input.sourceUrl ? "url" : undefined,
         sourceRef: input.sourceUrl,
       });
@@ -460,6 +505,9 @@ export class PostgresStore {
         id,
         namespace: ctx.namespace,
         kind,
+        claim_type: claimType,
+        approval_state: "none",
+        verification_state: "unverified",
         embedded: stored,
         ...(previous ? { supersedes: previous } : {}),
         ...(warning ? { warning: `stored without an embedding: ${warning}` } : {}),

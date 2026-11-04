@@ -564,13 +564,42 @@ BEGIN
 END
 $$;
 
+-- Holds the rows an export's authority rests on (the grant, its holder and
+-- their membership, and the owner's authority chain with each person on it)
+-- until the transaction ends, so a revocation, a disabled account or a lost
+-- membership waits for an export in progress instead of slipping past it.
+-- Returns the earliest wall-clock end among them, NULL if none ends.
+CREATE FUNCTION memory.lock_export_power(p_authority uuid, p_grant uuid, p_actor uuid, p_namespace_id uuid)
+RETURNS timestamptz
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog AS $$
+DECLARE
+  v_expires timestamptz;
+  v_link uuid := p_authority;
+  l record;
+BEGIN
+  IF p_grant IS NOT NULL THEN
+    SELECT g.expires_at INTO v_expires FROM memory.data_grants g WHERE g.id = p_grant FOR SHARE;
+    PERFORM 1 FROM memory.actors x WHERE x.id = p_actor FOR SHARE;
+    PERFORM 1 FROM memory.oauth_members m WHERE m.actor_id = p_actor AND m.namespace_id = p_namespace_id FOR SHARE;
+  END IF;
+  WHILE v_link IS NOT NULL LOOP
+    SELECT a.id, a.parent_id, a.actor_id, a.expires_at INTO l
+    FROM memory.approval_authorities a WHERE a.id = v_link FOR SHARE;
+    EXIT WHEN NOT FOUND;
+    PERFORM 1 FROM memory.actors x WHERE x.id = l.actor_id FOR SHARE;
+    v_expires := least(v_expires, l.expires_at);
+    v_link := l.parent_id;
+  END LOOP;
+  RETURN v_expires;
+END
+$$;
+REVOKE ALL ON FUNCTION memory.lock_export_power(uuid, uuid, uuid, uuid) FROM PUBLIC;
+
 CREATE OR REPLACE FUNCTION memory.start_export(p_user_id uuid, p_session_id uuid, p_export_id uuid, p_secret text) RETURNS void
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog AS $$
 DECLARE
   v_actor uuid;
   e memory.exports;
-  v_link uuid;
-  l record;
   v_chain_expires timestamptz;
 BEGIN
   IF p_secret IS NULL OR p_secret !~ '^[0-9a-f]{64}$' THEN
@@ -589,19 +618,7 @@ BEGIN
   IF e.expires_at <= clock_timestamp() THEN
     RAISE EXCEPTION 'this export has expired; start again' USING ERRCODE = '55000';
   END IF;
-  IF e.grant_id IS NOT NULL THEN
-    PERFORM 1 FROM memory.data_grants g WHERE g.id = e.grant_id FOR SHARE;
-    v_chain_expires := (SELECT g.expires_at FROM memory.data_grants g WHERE g.id = e.grant_id);
-    PERFORM 1 FROM memory.actors x WHERE x.id = v_actor FOR SHARE;
-  END IF;
-  v_link := e.authority_id;
-  WHILE v_link IS NOT NULL LOOP
-    SELECT a.id, a.parent_id, a.actor_id, a.expires_at INTO l
-    FROM memory.approval_authorities a WHERE a.id = v_link FOR SHARE;
-    PERFORM 1 FROM memory.actors x WHERE x.id = l.actor_id FOR SHARE;
-    v_chain_expires := least(v_chain_expires, l.expires_at);
-    v_link := l.parent_id;
-  END LOOP;
+  v_chain_expires := memory.lock_export_power(e.authority_id, e.grant_id, v_actor, e.namespace_id);
   IF NOT memory.export_power_valid(e.authority_id, e.grant_id, v_actor, e.namespace_id)
      OR v_chain_expires <= clock_timestamp() THEN
     RAISE EXCEPTION 'the authority this export was issued under is no longer valid' USING ERRCODE = '55000';
@@ -618,6 +635,7 @@ DECLARE
   e memory.exports;
   v_ns uuid;
   v_counts jsonb;
+  v_expires timestamptz;
 BEGIN
   IF p_secret IS NULL OR p_secret !~ '^[0-9a-f]{64}$' THEN
     RAISE EXCEPTION 'pass the export secret, as 64 lowercase hex digits' USING ERRCODE = '22023';
@@ -636,7 +654,11 @@ BEGIN
   IF e.started_at < clock_timestamp() - interval '10 minutes' THEN
     RAISE EXCEPTION 'this export has expired; start again' USING ERRCODE = '55000';
   END IF;
-  IF NOT memory.export_power_valid(e.authority_id, e.grant_id, e.actor_id, e.namespace_id) THEN
+  -- The authority is held until the export's transaction ends, and checked
+  -- again, by the clock, once the rows are gathered and before any is sent.
+  v_expires := memory.lock_export_power(e.authority_id, e.grant_id, e.actor_id, e.namespace_id);
+  IF NOT memory.export_power_valid(e.authority_id, e.grant_id, e.actor_id, e.namespace_id)
+     OR v_expires <= clock_timestamp() THEN
     RAISE EXCEPTION 'the authority this export was issued under is no longer valid' USING ERRCODE = '55000';
   END IF;
   v_ns := e.namespace_id;
@@ -729,6 +751,14 @@ BEGIN
     'source', x.source, 'erased_at', x.erased_at)
   FROM memory.erasures x
   WHERE x.namespace_id = v_ns ORDER BY x.erased_at, x.memory_id;
+
+  -- Nothing leaves until the function returns, so a power that ended while
+  -- the rows were gathered stops the whole export, which is then not recorded.
+  IF NOT memory.export_power_valid(e.authority_id, e.grant_id, e.actor_id, e.namespace_id)
+     OR v_expires <= clock_timestamp() THEN
+    RAISE EXCEPTION 'the authority this export was issued under ended while it was being gathered; start again'
+      USING ERRCODE = '55000';
+  END IF;
 END
 $$;
 

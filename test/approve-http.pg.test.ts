@@ -57,7 +57,7 @@ describe("approval page over http", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST
     },
   };
 
-  async function remember(content: string): Promise<string> {
+  async function remember(content: string, revises?: string): Promise<string> {
     const c = await appPool.connect();
     try {
       await c.query("BEGIN");
@@ -66,7 +66,10 @@ describe("approval page over http", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST
       await c.query("SELECT set_config('app.api_key_id', $1, true), set_config('app.namespace_id', $2, true)",
         [key.rows[0]?.id ?? "", cellId]);
       const id = (await c.query<{ id: string }>(
-        "SELECT memory.remember('decision', $1, 'remember', 'rest', p_claim_type => 'decision') AS id", [content],
+        revises
+          ? "SELECT memory.propose_revision($2, 'decision', $1, 'supersede_memory', 'rest', 'decision') AS id"
+          : "SELECT memory.remember('decision', $1, 'remember', 'rest', p_claim_type => 'decision') AS id",
+        revises ? [content, revises] : [content],
       )).rows[0].id;
       await c.query("COMMIT");
       return id;
@@ -243,6 +246,38 @@ describe("approval page over http", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST
     assert.equal(done.status, 409);
     assert.match(await done.text(), /no longer active/);
     assert.equal(await stateOf(id), "none");
+  });
+
+  test("a proposed revision shows the approved text it replaces, and approving it swaps them (D-04)", async () => {
+    const base = await remember("pay suppliers net 30");
+    const a = await toConfirm(base, "approve");
+    await post("/approve/confirm", a.cookie, { csrf: a.csrf!, choice: "confirm" });
+    const p1 = await remember("pay suppliers net 15", base);
+    const p2 = await remember("pay suppliers net 45", base);
+    const statusOf = async (id: string) =>
+      (await admin.query<{ s: string }>("SELECT status || '/' || approval_state AS s FROM memory.memories WHERE id = $1", [id]))
+        .rows[0].s;
+    assert.equal(await statusOf(p1), "proposed/pending");
+
+    const r = await toReview(p1);
+    assert.equal(r.status, 200, r.html);
+    assert.match(r.html, /Proposed revision/);
+    assert.match(r.html, /pay suppliers net 15/);
+    assert.match(r.html, /Approved text it would replace/);
+    assert.match(r.html, /pay suppliers net 30/);
+    const c = await post("/approve/review", r.cookie, { csrf: r.csrf!, action: "approve" });
+    const html = await c.text();
+    const done = await post("/approve/confirm", cookieOf(c), { csrf: csrfOf(html)!, choice: "confirm" });
+    assert.equal(done.status, 200);
+    assert.equal(await statusOf(p1), "active/approved");
+    assert.equal(await statusOf(base), "superseded/approved");
+
+    // The competing revision is now stale: the page says so and offers nothing to decide.
+    const stale = await toReview(p2);
+    assert.equal(stale.status, 200);
+    assert.match(stale.html, /has changed, so it can&#39;t be decided/);
+    assert.doesNotMatch(stale.html, /name="action" value="approve"/);
+    assert.equal(await statusOf(p2), "proposed/pending");
   });
 
   test("going back without deciding leaves the memory as it was", async () => {

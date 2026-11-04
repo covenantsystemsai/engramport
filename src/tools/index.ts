@@ -422,8 +422,10 @@ export const allToolDefinitions = [
     description:
       "Replace one active memory in your own namespace with a new version, and say why. Name the version you read: " +
       "if someone else replaced or retracted it meanwhile, nothing changes and the answer gives the current one, so " +
-      "read that and decide again. The old text is kept, marked superseded. The new version is unapproved and " +
-      "unverified, even if the old one was approved, and needs its own approval. Only works on the Postgres store.",
+      "read that and decide again. The old text is kept, marked superseded, and the new version is unapproved and " +
+      "unverified. If the version you name was approved by a person, it stays current: your text is stored as a " +
+      "proposed revision and put up for approval, and replaces it only when a person approves it. " +
+      "Only works on the Postgres store.",
     inputSchema: {
       type: "object" as const,
       properties: {

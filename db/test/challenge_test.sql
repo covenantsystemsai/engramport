@@ -239,6 +239,7 @@ SELECT * FROM t.challenge(:'s2_user_id', :'s2_session_id', :'m_rev', 'approve') 
 BEGIN; SELECT t.as_key(:'k_c1', :'c1');
   UPDATE memory.memories SET status = 'superseded' WHERE id = :'m_sup';
   UPDATE memory.memories SET status = 'retracted' WHERE id = :'m_ret';
+  UPDATE memory.memories SET status = 'superseded' WHERE id = :'m_old';
   UPDATE memory.memories SET supersedes_id = :'m_old' WHERE id = :'m_ver';
 COMMIT;
 SELECT t.expect_error('a superseded memory',

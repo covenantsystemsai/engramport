@@ -452,6 +452,52 @@ export class PostgresStore {
   }
 
   /**
+   * Write a revision of an approved memory as a proposal (D-04). The approved
+   * version stays current; the proposal is put up for approval at once and
+   * replaces it only when a person approves this exact text.
+   */
+  private async propose(
+    c: pg.PoolClient,
+    ctx: KeyContext,
+    baseId: string,
+    embedded: Embedded,
+    input: RememberInput & { kind: MemoryKind; claimType: ClaimType; sourceKind?: string; sourceRef?: string;
+                             claimed?: Record<string, unknown> },
+  ) {
+    const r = await c.query<{ id: string }>(
+      `SELECT memory.propose_revision(
+         p_base_id => $1::uuid, p_kind => $2::memory.memory_kind, p_content => $3, p_tool => $4,
+         p_transport => $5::memory.transport, p_claim_type => $6::memory.claim_type, p_importance => $7::real,
+         p_metadata => $8::jsonb, p_dedup_key => $9, p_request_id => $10, p_source_kind => $11,
+         p_source_ref => $12, p_claimed => $13::jsonb) AS id`,
+      [
+        baseId, input.kind, input.content, input.tool ?? "remember", this.opts.transport, input.claimType,
+        input.importance ?? 0.5, JSON.stringify(input.metadata ?? {}), input.dedupKey ?? null,
+        currentRequestId() ?? null, input.sourceKind ?? null, input.sourceRef ?? null,
+        JSON.stringify(input.claimed ?? {}),
+      ],
+    );
+    const id = r.rows[0].id;
+    const stored = await this.insertEmbedding(c, id, ctx, embedded, 0);
+    return {
+      id,
+      namespace: ctx.namespace,
+      kind: input.kind,
+      claim_type: input.claimType,
+      status: "proposed",
+      proposed: true,
+      revises: baseId,
+      approval_state: "pending",
+      verification_state: "unverified",
+      embedded: stored,
+      note:
+        `${baseId} is approved, so it stays current. This text is stored as a proposed revision and put up for ` +
+        "approval; it replaces the approved version only when a person approves it. Recall keeps returning the " +
+        "approved version until then.",
+    };
+  }
+
+  /**
    * Store one memory in the key's namespace. With a dedup key, a new version
    * supersedes the active one (the old text is kept), and the same text again
    * changes nothing.
@@ -483,8 +529,9 @@ export class PostgresStore {
         await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
           `engramport:dedup:${ctx.namespaceId}:${input.dedupKey}`,
         ]);
-        const cur = await c.query<{ id: string; content_sha256: string; claim_type: ClaimType }>(
-          `SELECT id, content_sha256, claim_type::text AS claim_type FROM memory.memories
+        const cur = await c.query<{ id: string; content_sha256: string; claim_type: ClaimType; approval_state: string }>(
+          `SELECT id, content_sha256, claim_type::text AS claim_type, approval_state::text AS approval_state
+           FROM memory.memories
            WHERE namespace_id = $1 AND dedup_key = $2 AND status = 'active' FOR UPDATE`,
           [ctx.namespaceId, input.dedupKey],
         );
@@ -500,6 +547,15 @@ export class PostgresStore {
         // The same text with the same claim changes nothing; a new claim type is a new version.
         if (cur.rows[0]?.content_sha256 === sha256Hex(content) && cur.rows[0].claim_type === claimType) {
           return { id: cur.rows[0].id, namespace: ctx.namespace, kind, unchanged: true };
+        }
+        // An approved version stays current: the new text becomes a proposal
+        // that a person approves or rejects (D-04).
+        if (cur.rows[0]?.approval_state === "approved") {
+          return this.propose(c, ctx, cur.rows[0].id, embedded, {
+            content, kind, claimType, metadata: input.metadata, dedupKey: input.dedupKey,
+            importance: input.importance, tool: input.tool ?? "remember",
+            sourceKind: input.sourceUrl ? "url" : undefined, sourceRef: input.sourceUrl,
+          });
         }
         if (cur.rows[0]) {
           previous = cur.rows[0].id;
@@ -559,10 +615,11 @@ export class PostgresStore {
       PostgresStore.requireWrite(ctx);
 
       type Target = { id: string; namespace_id: string; status: string; kind: MemoryKind; claim_type: ClaimType;
-                      dedup_key: string | null; importance: number; content_sha256: string };
+                      dedup_key: string | null; importance: number; content_sha256: string; approval_state: string;
+                      supersedes_id: string | null };
       const read = (lock: boolean) => c.query<Target>(
         `SELECT id, namespace_id, status::text AS status, kind::text AS kind, claim_type::text AS claim_type,
-                dedup_key, importance, content_sha256
+                dedup_key, importance, content_sha256, approval_state::text AS approval_state, supersedes_id
          FROM memory.memories WHERE id = $1${lock ? " FOR UPDATE" : ""}`,
         [input.memoryId],
       );
@@ -578,6 +635,13 @@ export class PostgresStore {
         ]);
       }
       const old = (await read(true)).rows[0];
+      if (old.status === "proposed") {
+        throw new StoreError(
+          "conflict",
+          `this is a proposed revision, not a current version; it would replace ${old.supersedes_id}. ` +
+            "To change it, propose a new revision of the current version",
+        );
+      }
       if (old.status !== "active") {
         const current = await c.query<{ id: string }>(
           `WITH RECURSIVE later AS (
@@ -598,6 +662,16 @@ export class PostgresStore {
       const claimType = claimGiven ?? old.claim_type;
       if (old.content_sha256 === sha256Hex(content) && old.claim_type === claimType && old.kind === kind) {
         return { id: old.id, namespace: ctx.namespace, kind, unchanged: true };
+      }
+      // An approved version stays current: the new text becomes a proposal
+      // that a person approves or rejects (D-04).
+      if (old.approval_state === "approved") {
+        return this.propose(c, ctx, old.id, embedded, {
+          content, kind, claimType, metadata: input.metadata, dedupKey: old.dedup_key ?? undefined,
+          importance: old.importance, tool: "supersede_memory",
+          sourceKind: input.sourceUrl ? "url" : undefined, sourceRef: input.sourceUrl,
+          claimed: { revision_reason: reason },
+        });
       }
       await c.query("UPDATE memory.memories SET status = 'superseded' WHERE id = $1", [old.id]);
       const id = await this.rememberOne(c, ctx, {
@@ -652,7 +726,7 @@ export class PostgresStore {
          chain AS (SELECT id, step FROM earlier UNION SELECT id, step FROM later)
          SELECT ${MEMORY_COLUMNS}, p.claimed->>'revision_reason' AS revision_reason, ch.step
          FROM chain ch JOIN memory.memories m ON m.id = ch.id ${MEMORY_JOINS}
-         ORDER BY ch.step`,
+         ORDER BY ch.step, m.created_at, m.id`,
         [id],
       );
       if (!r.rows.some((row) => row.id === id.toLowerCase())) throw new StoreError("not_found", "memory not found");
@@ -859,6 +933,18 @@ export class PostgresStore {
     return this.withKey(rawKey, async (c, ctx) => {
       PostgresStore.checkNamespace(ctx, namespace);
       PostgresStore.requireWrite(ctx);
+      const pre = await c.query<{ status: string; approval_state: string; namespace_id: string }>(
+        "SELECT status::text AS status, approval_state::text AS approval_state, namespace_id FROM memory.memories WHERE id = $1",
+        [id],
+      );
+      const p = pre.rows[0];
+      if (p && p.namespace_id === ctx.namespaceId && p.approval_state === "approved" && p.status !== "retracted") {
+        throw new StoreError(
+          "forbidden",
+          "this memory was approved by a person, so an agent can't retract it. Propose a revision with " +
+            "supersede_memory, or ask a person with authority over it",
+        );
+      }
       const r = await c.query(
         "UPDATE memory.memories SET status = 'retracted' WHERE id = $1 AND status <> 'retracted' RETURNING id",
         [id],

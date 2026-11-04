@@ -88,6 +88,11 @@ interface Review {
   requested_at: Date | null;
   scope: string;
   created_at: Date;
+  /** For a proposed revision (D-04): the approved version it would replace. */
+  replaces_memory_id: string | null;
+  replaces_content: string | null;
+  replaces_content_sha256: string | null;
+  replaces_current: boolean | null;
 }
 
 const b64url = (buf: Buffer) => buf.toString("base64url");
@@ -174,7 +179,29 @@ function details(r: Review): string {
     `<dt>Written</dt><dd>${when(r.created_at)}</dd>` +
     `<dt>Approval asked</dt><dd>${when(r.requested_at)}</dd>` +
     `<dt>Fingerprint</dt><dd><small>${escape(r.content_sha256)}</small></dd></dl>` +
-    `<pre>${escape(r.content)}</pre>`;
+    (r.replaces_memory_id
+      ? (r.replaces_current
+          ? `<p><strong>Proposed revision.</strong> Approving it replaces the approved version below, which stays ` +
+            `current until then.</p>`
+          : `<p><strong>Proposed revision.</strong> The approved version it was written against has since been ` +
+            `replaced.</p>`) +
+        `<h2>Proposed text</h2><pre>${escape(r.content)}</pre>` +
+        `<h2>Approved text it would replace</h2>` +
+        `<p><small>Fingerprint ${escape(r.replaces_content_sha256 ?? "")}</small></p>` +
+        `<pre>${escape(r.replaces_content ?? "")}</pre>`
+      : `<pre>${escape(r.content)}</pre>`);
+}
+
+/** Why this memory can't be decided now, or undefined if it can. */
+function notDecidable(r: Review): string | undefined {
+  if (r.status !== "active" && r.status !== "proposed") {
+    return "This version is no longer active, so it can't be decided. Review the current one.";
+  }
+  if (r.approval_state === "approved" || r.approval_state === "rejected") return `This memory was already ${r.approval_state}.`;
+  if (r.status === "proposed" && !r.replaces_current) {
+    return "The approved version this revision would replace has changed, so it can't be decided. Review the current one.";
+  }
+  return undefined;
 }
 
 /** The database's own answer, which is written for the person, or a generic one. */
@@ -254,11 +281,9 @@ export function createApprovalRouter(opts: ApprovalPageOptions): Router {
       return page(res, 403, "Nothing to decide here", `<p>${escape(why)}</p>`);
     }
     if (!r) throw new Error("the review returned nothing");
-    if (r.status !== "active" || r.approval_state === "approved" || r.approval_state === "rejected") {
+    const why = notDecidable(r);
+    if (why) {
       await end(res, signed);
-      const why = r.status !== "active"
-        ? "This version is no longer active, so it can't be decided. Review the current one."
-        : `This memory was already ${r.approval_state}.`;
       return page(res, 200, "Nothing to decide here", `<p>${escape(why)}</p>${details(r)}`);
     }
     const csrf = b64url(randomBytes(24));

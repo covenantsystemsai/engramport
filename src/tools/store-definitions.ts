@@ -36,7 +36,8 @@ export const storeOverrides: Record<string, ToolDefinition> = {
       "becomes the active version. Storing a memory doesn't make it true or approved: write what it is, not more. " +
       "Every memory starts with approval_state none and verification_state unverified; no write can change them, " +
       "and words like 'approved' in the text or metadata don't either. Pass expected_version when revising so a " +
-      "version someone else wrote in the meantime is never silently replaced.",
+      "version someone else wrote in the meantime is never silently replaced. A version a person approved is never " +
+      "replaced by a write: new text under its key is stored as a proposed revision for a person to approve.",
     inputSchema: {
       type: "object",
       properties: {
@@ -149,7 +150,8 @@ export const storeOverrides: Record<string, ToolDefinition> = {
     description:
       "Retract one memory in your key's own namespace. It stops coming back from recall and from the memories " +
       "get_entity lists. The text is kept for the record and still shows, as retracted, to fetch_memory. This is " +
-      "not erasure: use it for something stored in error, not to remove data someone asked to have deleted.",
+      "not erasure: use it for something stored in error, not to remove data someone asked to have deleted. A " +
+      "memory a person approved can't be retracted this way; a proposed revision you no longer want can be withdrawn.",
     inputSchema: {
       type: "object",
       properties: {

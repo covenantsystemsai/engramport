@@ -661,6 +661,45 @@ describe("postgres store", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
     assert.equal((await store.fetch(keys.cell1, plain.id)).memory.status, "superseded");
   });
 
+  test("request_erasure only asks; once a person erases, nothing of the text comes back (D-02)", async () => {
+    const v1 = await store.remember(keys.cell1, { content: "Erasure store check: the client's home number", dedupKey: "erase-me" });
+    const v2 = await store.remember(keys.cell1, { content: "Erasure store check: the client's new home number", dedupKey: "erase-me" });
+
+    const bad = await executeStoreTool("request_erasure", { memory_ids: [v2.id], reason: "because" }, store, keys.cell1);
+    assert.equal(JSON.parse(bad.content[0].text).code, "invalid");
+    const tooMany = await executeStoreTool("request_erasure",
+      { memory_ids: Array.from({ length: 101 }, () => v2.id), reason: "owner_request" }, store, keys.cell1);
+    assert.equal(JSON.parse(tooMany.content[0].text).code, "invalid");
+    const other = await executeStoreTool("request_erasure", { memory_ids: [v2.id], reason: "owner_request" }, store, keys.cell2);
+    assert.equal(JSON.parse(other.content[0].text).code, "not_found", "another cell can't name it");
+    const asked = await executeStoreTool("request_erasure", { memory_ids: [v2.id, v2.id], reason: "owner_request" }, store, keys.cell1);
+    assert.equal(asked.isError, undefined);
+    const req = JSON.parse(asked.content[0].text) as { request_id: string; memories: number; state: string };
+    assert.deepEqual([req.memories, req.state], [1, "proposed"]);
+    assert.equal((await store.fetch(keys.cell1, v2.id)).memory.status, "active", "asking erases nothing");
+
+    // A person carries it out (the decision itself is covered by db/test/erasure_test.sql).
+    await admin.query("SELECT memory.erase_chain($1, $2, 'request')", [v2.id, req.request_id]);
+
+    for (const id of [v1.id, v2.id]) {
+      const f = (await store.fetch(keys.cell1, id)).memory;
+      assert.deepEqual([f.status, f.content], ["erased", ""], "every version is a content-free tombstone");
+    }
+    const recalled = await store.recall(keys.cell1, { query: "erasure store check home number", mode: "keyword", topK: 20 });
+    assert.equal(recalled.results.filter((x) => x.id === v1.id || x.id === v2.id).length, 0);
+    const h = await store.history(keys.cell1, v2.id);
+    assert.deepEqual(h.versions.map((v) => [v.id, v.status, v.content]), [[v1.id, "erased", ""], [v2.id, "erased", ""]]);
+    await assert.rejects(store.retract(keys.cell1, v2.id), (e: StoreError) => e.code === "conflict");
+    await assert.rejects(store.supersede(keys.cell1, { memoryId: v2.id, content: "x", reason: "y" }),
+      (e: StoreError) => e.code === "conflict");
+    await assert.rejects(store.requestErasure(keys.cell1, { memoryIds: [v1.id], reason: "legal" }),
+      (e: StoreError) => e.code === "conflict");
+    // No fingerprint is kept, so the same text later is a new memory, not the erased one coming back.
+    const again = await store.remember(keys.cell1, { content: "Erasure store check: the client's new home number", dedupKey: "erase-me" });
+    assert.ok(again.id !== v1.id && again.id !== v2.id);
+    assert.equal((await store.fetch(keys.cell1, again.id)).memory.supersedes, undefined);
+  });
+
   test("a new claim type under a dedup key is a new version", async () => {
     const a = await store.remember(keys.cell1, { content: "Move the standup to 10", dedupKey: "standup", claimType: "proposal" });
     const b = await store.remember(keys.cell1, { content: "Move the standup to 10", dedupKey: "standup", claimType: "decision" });

@@ -96,7 +96,7 @@ Categories follow section 3 of the directive. "Section" is the directive section
 | --- | --- | --- | --- |
 | Supersession | 6.4 | `dedup_key` versioning with `expected_version`; `supersede_memory`, which names the version it replaces and records why; `memory_history`; an approved memory is revised only by a proposal a person approves (D-04) | No person's retraction path for an approved memory yet |
 | Contradictions | 6.5 | A `contradicts` link kind; `find_conflicts` lists open ones, and one closes when either side is superseded or retracted | An agent can still remove a flag with `unlink`; dismissing a conflict without changing either memory should need a person |
-| Deletion lifecycle | 7 | Retraction | No export, no physical deletion, no deletion verification, nothing for backups |
+| Deletion lifecycle | 7 | Retraction; erasure of up to 100 memories per request, decided by an owner with a fresh sign-in, removing every version and everything derived, verified and recorded with a content-free tombstone; `request_erasure` for agents; reapplying erasures after a restore (D-02, `docs/erasure.md`) | No page for the owner to decide yet; delegated erasure, whole-cell erasure, the 30-day retraction window and export are still to build |
 | Claim types | 6.1 | `memory_kind` has `decision`, `hypothesis`, `insight`, `fact` | Kind mixes claim type with content type; no approval, verification or lifecycle dimensions |
 | Telemetry | 15 | Request ids, provenance timestamps | No metrics, no `session_id` filled, no latency or error counts |
 | Tool contract | 8 | `remember`, `recall`, `fetch_memory`, `delete_memory`, `link`, `unlink`, `get_entity`, `upload`, `inspect`, `list_namespaces` | `context`, `history`, `timeline`, `feedback`, `prepare_handoff`, `find_conflicts`, `graph_neighbors`, `propose_promotion`; `recall` has no as-of or pagination |
@@ -110,7 +110,7 @@ Categories follow section 3 of the directive. "Section" is the directive section
 | Controlled promotion from cell to tower to city | 5 |
 | As-of (point-in-time) recall and history | 8 |
 | Handoff packets with a token budget | 8, 9 |
-| Export and real deletion, with a deletion report | 7 |
+| Export | 7 |
 | Supervisor integration boundary (defined in section 6 below, not built) | 9 |
 | Self-serve tier, MCP registry listing, abuse checks | later |
 
@@ -136,7 +136,7 @@ is a starting point for that conversation, not an assumption anything is built o
 | Id | Decision | Recommended default | Blocks |
 | --- | --- | --- | --- |
 | D-01 | Automatic extraction of entities and relations | None for the first pilot (option A). Graph rows only when an agent calls `link`. Revisit after the pilot with a named provider | Gate 3 scope |
-| D-02 | Deletion policy: tombstones, retention, backups | Retraction by default; physical deletion only on an owner's request, leaving a tombstone with id, time and requester but no text. No retention period is set until he names one. Backups are described honestly as outside immediate erasure | Gate 2 deletion work |
+| D-02 | Deletion, retention, backups and export | Decided Nov 4: a person with authority erases, agents only ask; erasure removes the text and everything derived and keeps a tombstone with no content-derived data, not even a fingerprint; at most 100 memories per request; whole-cell erasure needs the owner and a different person with AN2B governance authority; retraction is separate and restorable by a person for 30 days, erasure is final; restored backups are reconciled against erasures before serving; export needs its own accepted grant and is never stored on the server. See `docs/erasure.md` | Gate 2 deletion work |
 | D-03 | Who may approve and who may verify | Only human actors may approve, and only the namespace owner and the founder at first. Agents may propose and may attach evidence; they may not approve or mark verified | Gate 2 trust layer |
 | D-04 | Revising an approved memory | Decided Nov 4: an agent's revision is a proposal; the approved version stays current until a person approves the proposal, which then replaces it atomically. See `docs/approvals.md` | Gate 2 trust layer |
 | D-05 | Permission to author deploy files and a setup script (files only) | Yes for files in a PR, with deploy kept as its own later decision | Gate 3 preparation |

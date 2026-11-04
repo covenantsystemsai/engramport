@@ -20,6 +20,7 @@
  *   supersede_memory — Replace one memory with a new version (Postgres store)
  *   memory_history  — Every version of one memory (Postgres store)
  *   find_conflicts  — Open contradictions between active memories (Postgres store)
+ *   request_erasure — Ask a person to erase memories (Postgres store)
  */
 
 import { config } from "../config.js";
@@ -475,6 +476,34 @@ export const allToolDefinitions = [
       required: [],
     },
   },
+  {
+    name: "request_erasure",
+    description:
+      "Ask for memories in your own namespace to be erased, for example when their owner asks for data to be " +
+      "deleted or something was stored that never should have been. Nothing is erased by this call: a person with " +
+      "authority over the namespace reviews the request and decides through their own sign-in, outside this tool. " +
+      "If they confirm, every version of each memory is erased, with its embeddings, graph links and the digests " +
+      "that could identify its text, and only a content-free record that it happened is kept. Erasure can't be " +
+      "undone. To just stop a memory coming back from recall, use delete_memory instead. At most 100 memories per " +
+      "request. Only works on the Postgres store.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        memory_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "The memories to erase (1-100 ids); naming any version erases every version of it",
+        },
+        reason: {
+          type: "string",
+          enum: ["owner_request", "stored_in_error", "legal"],
+          description: "Why: the owner asked, it was stored in error, or a legal requirement",
+        },
+        namespace: { type: "string", description: "Optional; must be your key's own namespace" },
+      },
+      required: ["memory_ids", "reason"],
+    },
+  },
 ];
 
 /**
@@ -577,6 +606,7 @@ export async function executeTool(
       case "supersede_memory":
       case "memory_history":
       case "find_conflicts":
+      case "request_erasure":
         return {
           content: [{ type: "text", text: JSON.stringify({ error: `${name} needs the Postgres store`, code: "not_available" }) }],
           isError: true,

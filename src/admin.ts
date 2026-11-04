@@ -156,6 +156,23 @@ export interface ApprovalEventRow {
   authority_id: string | null;
 }
 
+export interface ErasureRow {
+  id: string;
+  namespace: string;
+  reason: "owner_request" | "stored_in_error" | "legal";
+  state: "proposed" | "completed";
+  requested_by: string;
+  requested_at: Date;
+  memories: number;
+  decided_by: string | null;
+  authority_id: string | null;
+  completed_at: Date | null;
+  /** Counts of what was removed, and whether nothing was left. Never text. */
+  evidence: Record<string, number | boolean> | null;
+  tombstones: number;
+  failed_attempts: number;
+}
+
 export interface MintedKey {
   key: string;
   prefix: string;
@@ -822,6 +839,37 @@ export class AdminClient {
     );
   }
 
+  /**
+   * Erasure requests, newest first: who asked, why, how many memories, who
+   * decided under which authority, what was removed, and failed attempts.
+   * Ids, counts and times only; the admin never sees the text, and can't erase.
+   */
+  async listErasures(opts: { namespace?: string; sinceMs?: number; limit?: number } = {}): Promise<ErasureRow[]> {
+    if (opts.namespace) checkPath(opts.namespace);
+    const limit = opts.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new AdminError("--limit is 1 to 1000");
+    const since = opts.sinceMs === undefined ? null : new Date(Date.now() - opts.sinceMs);
+    return this.tx(async (c) =>
+      (await c.query<ErasureRow>(
+        `SELECT r.id, n.path AS namespace, r.reason::text AS reason, r.state::text AS state, a.slug AS requested_by,
+                r.created_at AS requested_at,
+                (SELECT count(*)::int FROM memory.erasure_request_items i WHERE i.request_id = r.id) AS memories,
+                d.slug AS decided_by, r.authority_id, r.completed_at, r.evidence,
+                (SELECT count(*)::int FROM memory.erasures e WHERE e.request_id = r.id) AS tombstones,
+                (SELECT count(*)::int FROM memory.erasure_attempts f WHERE f.request_id = r.id) AS failed_attempts
+         FROM memory.erasure_requests r
+         JOIN memory.namespaces n ON n.id = r.namespace_id
+         JOIN memory.actors a ON a.id = r.requested_by_actor_id
+         LEFT JOIN memory.actors d ON d.id = r.decided_by_actor_id
+         WHERE ($1::text IS NULL OR n.path = $1 OR starts_with(n.path, $1 || '/'))
+           AND ($2::timestamptz IS NULL OR r.created_at >= $2)
+         ORDER BY r.created_at DESC, r.id
+         LIMIT $3`,
+        [opts.namespace ?? null, since, limit],
+      )).rows,
+    );
+  }
+
   /** Connections people approved: which client, as which member, and whether it still works. */
   async listConnections(opts: { namespace?: string; email?: string; includeRevoked?: boolean } = {}): Promise<ConnectionRow[]> {
     if (opts.namespace) checkPath(opts.namespace);
@@ -984,6 +1032,12 @@ export const ADMIN_USAGE = `Usage: engramport admin <command>
                                      who asked for approval and who approved or
                                      rejected which memory, where, under which
                                      authority. Never the text or its digest.
+  erasure list [--namespace <path>] [--since 7d] [--limit 100]
+                                     who asked for memories to be erased and why,
+                                     who decided under which authority, and how
+                                     much was removed. Never the text. The admin
+                                     can't erase anything; a person with authority
+                                     over the namespace decides with their sign-in.
   connection list [--namespace <path>] [--email <email>] [--all]
   connection revoke <id>             ends one connection and its tokens; the
                                      membership stays, so they can connect again
@@ -1319,6 +1373,26 @@ export async function runAdmin(argv: string[], open: () => AdminClient, io: Admi
             + `${e.scope ? `  ${e.scope} under ${e.authority_id}` : ""}`);
         }
         if (!rows.length) io.err("No approval requests or decisions.");
+        return 0;
+      }
+      case "erasure list": {
+        const { positional, flags } = parseFlags(rest, { namespace: "value", since: "value", limit: "value" });
+        if (positional.length) throw new UsageError(`unexpected argument ${positional[0]}`);
+        const rows = await db().listErasures({
+          namespace: typeof flags.namespace === "string" ? flags.namespace : undefined,
+          sinceMs: typeof flags.since === "string" ? parseDuration(flags.since) : undefined,
+          limit: typeof flags.limit === "string" ? Number(flags.limit) : undefined,
+        });
+        for (const e of rows) {
+          const done = e.state === "completed"
+            ? `erased ${when(e.completed_at!)} by ${e.decided_by} under ${e.authority_id}: ${e.tombstones} versions, `
+              + `${Object.entries(e.evidence ?? {}).filter(([k]) => !["verified", "memories_named", "versions"].includes(k))
+                  .map(([k, v]) => `${v} ${k.replace(/_/g, " ")}`).join(", ")}${e.evidence?.verified ? ", verified" : ""}`
+            : "waiting for a person to decide";
+          io.out(`${when(e.requested_at)}  ${e.id}  ${e.namespace}  ${e.reason}  ${e.memories} memories  by ${e.requested_by}`
+            + `  ${done}${e.failed_attempts ? `  (${e.failed_attempts} failed attempts)` : ""}`);
+        }
+        if (!rows.length) io.err("No erasure requests.");
         return 0;
       }
       case "authority revoke": {

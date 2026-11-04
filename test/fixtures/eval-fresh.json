@@ -1,0 +1,33 @@
+{
+  "about": "A second held-out set over the eval-basic.json memories, written after hybrid search was tuned (migration 0013) and never used to tune any retriever. Its first result is the honest check on that tuning: do not change a retriever to fit it, write a new set instead. Questions mix three kinds: paraphrases that share no words with their answer, partial overlaps, and questions whose words also appear in other memories. Made up: no real people, clients or places.",
+  "questions": [
+    { "question": "Which change switched how keys are hashed?", "expect": ["pr"] },
+    { "question": "What did pull request forty-two do?", "expect": ["pr"] },
+    { "question": "Has the pump out in the north yard been changed recently?", "expect": ["pump"] },
+    { "question": "Who should I ring at Riverbend?", "expect": ["contact"] },
+    { "question": "Can I ship a release on a Friday?", "expect": ["deploy"] },
+    { "question": "What has to happen before a deploy goes out?", "expect": ["deploy"] },
+    { "question": "Do new agents get write access straight away?", "expect": ["onboard"] },
+    { "question": "How long does a new agent stay read-only?", "expect": ["onboard"] },
+    { "question": "What day of the month does invoicing happen?", "expect": ["billing"] },
+    { "question": "Which floor has the coffee?", "expect": ["d1"] },
+    { "question": "Did lunch with the team change days?", "expect": ["d2"] },
+    { "question": "How frequently is the ink cartridge in the printer replaced?", "expect": ["d3"] },
+    { "question": "When do the car park permits expire?", "expect": ["d4"] },
+    { "question": "Where are the review slides stored?", "expect": ["d5"] },
+    { "question": "Is the office open on Saturdays?", "expect": ["d6"] },
+    { "question": "How often does the visitor network code change?", "expect": ["d8"] },
+    { "question": "Which pull request made the store faster to query?", "expect": ["x0"] },
+    { "question": "Where do we keep the hosepipe for the garden?", "expect": ["x1"] },
+    { "question": "Do the corridor lights switch off on their own?", "expect": ["x2"] },
+    { "question": "Is the kitchen drain blocked?", "expect": ["x3"] },
+    { "question": "When were the window shades last washed?", "expect": ["x4"] },
+    { "question": "Can I borrow an umbrella somewhere?", "expect": ["x6"] },
+    { "question": "Were new seats bought for the annex?", "expect": ["x11"] },
+    { "question": "What day is the refrigerator emptied?", "expect": ["x12"] },
+    { "question": "When was the roof last repaired?", "expect": ["x16"] },
+    { "question": "How often are the plants in the entrance hall watered?", "expect": ["x17"] },
+    { "question": "Is there a whiteboard on the upper floor?", "expect": ["x18"] },
+    { "question": "Who do I ask about getting the snow cleared from the lot?", "expect": ["x13"] }
+  ]
+}

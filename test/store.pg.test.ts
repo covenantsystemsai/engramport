@@ -507,6 +507,7 @@ describe("postgres store", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
         [undefined, "school run", "time zones"]);
       assert.deepEqual(h.versions.map((v) => v.claim_type), ["proposal", "proposal", "decision"]);
     }
+    assert.equal((await store.history(keys.cell1, b.id.toUpperCase())).versions.length, 3, "an upper-case id is the same id");
     const t = await executeStoreTool("memory_history", { memory_id: b.id }, store, keys.cell1);
     assert.equal(JSON.parse(t.content[0].text).versions.length, 3);
     // Another cell can't read the history, and a tower memory's history comes back without provenance.

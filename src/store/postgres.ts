@@ -655,7 +655,7 @@ export class PostgresStore {
          ORDER BY ch.step`,
         [id],
       );
-      if (!r.rows.some((row) => row.id === id)) throw new StoreError("not_found", "memory not found");
+      if (!r.rows.some((row) => row.id === id.toLowerCase())) throw new StoreError("not_found", "memory not found");
       return {
         note: UNTRUSTED_NOTE,
         versions: r.rows.map((row) => ({

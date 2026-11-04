@@ -44,6 +44,12 @@ export interface ExportPageOptions {
   perMinute?: number;
   /** Rows fetched from the database per step of the stream. Default 500. */
   batch?: number;
+  /**
+   * How long the stream waits for the browser to take more before giving up,
+   * in milliseconds. Default 60 seconds. The whole download also has to finish
+   * within ten minutes of its start.
+   */
+  stallMs?: number;
 }
 
 const COOKIE = "__Host-ep_export";
@@ -108,6 +114,7 @@ export function createExportRouter(opts: ExportPageOptions): Router {
   const { db, pepper, identity } = opts;
   const issuer = opts.publicUrl;
   const batch = opts.batch ?? 500;
+  const stallMs = opts.stallMs ?? 60_000;
   const router = express.Router();
   const form = express.urlencoded({ extended: false, limit: "4kb" });
   const limit = rateLimit({
@@ -251,12 +258,19 @@ export function createExportRouter(opts: ExportPageOptions): Router {
     // and commits only once every row has gone out.
     const c = await db.connect();
     let open = false;
+    // A connection that fails while the stream waits on the browser is
+    // reported here, so the wait ends and the connection is thrown away.
+    let broken: Error | undefined;
+    const onClientError = (err: Error) => { broken = err; };
+    c.on("error", onClientError);
+    const deadline = Date.now() + 10 * 60 * 1000;
     try {
       await c.query("BEGIN");
       open = true;
       await c.query("SET LOCAL statement_timeout = '120s'");
-      // A stream left waiting on a browser for this long is ended by Postgres itself.
-      await c.query("SET LOCAL idle_in_transaction_session_timeout = '120s'");
+      // A backstop: Postgres ends a stream left idle this long, even if this
+      // process stops looking after it.
+      await c.query("SET LOCAL idle_in_transaction_session_timeout = '300s'");
       await c.query("DECLARE export_rows NO SCROLL CURSOR FOR SELECT r::text AS line FROM memory.export_rows($1, $2, $3) r",
         [visit.sessionId, visit.exportId, visit.secret]);
       const fetch = async () => (await c.query<{ line: string }>(`FETCH ${batch} FROM export_rows`)).rows;
@@ -281,19 +295,30 @@ export function createExportRouter(opts: ExportPageOptions): Router {
       let closed = false;
       res.on("close", () => { closed = true; });
       const gone = () => new Error("the browser went away before the export finished");
-      // Wait for the browser to take more, or for it to go away: a closed
-      // response never drains, and the transaction must still end.
+      // Wait for the browser to take more, but not for ever: a closed response
+      // never drains, and a browser that stops reading may never close. Either
+      // way the transaction must end and the connection go back.
       const drained = () => new Promise<void>((resolve, reject) => {
         const done = () => { off(); resolve(); };
         const fail = () => { off(); reject(gone()); };
-        const off = () => { res.off("drain", done); res.off("close", fail); res.off("error", fail); };
+        const stalled = () => { off(); reject(new Error("the browser stopped taking the export")); };
+        const lost = (err: Error) => { off(); reject(err); };
+        const timer = setTimeout(stalled, Math.max(0, Math.min(stallMs, deadline - Date.now())));
+        const off = () => {
+          clearTimeout(timer);
+          res.off("drain", done); res.off("close", fail); res.off("error", fail); c.off("error", lost);
+        };
         res.once("drain", done);
         res.once("close", fail);
         res.once("error", fail);
+        c.once("error", lost);
         if (closed || res.destroyed) fail();
+        else if (broken) lost(broken);
       });
       while (rows.length) {
         if (closed || res.destroyed) throw gone();
+        if (broken) throw broken;
+        if (Date.now() > deadline) throw new Error("the export took too long");
         const chunk = rows.map((r) => r.line).join("\n") + "\n";
         if (!res.write(chunk)) await drained();
         rows = await fetch();
@@ -303,7 +328,9 @@ export function createExportRouter(opts: ExportPageOptions): Router {
       open = false;
       res.end();
     } catch (err) {
-      if (open) await c.query("ROLLBACK").catch(() => undefined);
+      if (open && !broken) {
+        await c.query("ROLLBACK").then(() => { open = false; }, (e: Error) => { broken = e; });
+      }
       if (res.headersSent) {
         // Part of the file went out; end it broken so it can't pass for a whole one.
         console.error("[engramport] export stream failed:", (err as Error).message);
@@ -312,7 +339,10 @@ export function createExportRouter(opts: ExportPageOptions): Router {
       }
       throw err;
     } finally {
-      c.release();
+      c.off("error", onClientError);
+      // A connection that failed, or whose transaction could not be ended, is
+      // thrown away rather than handed to the next request.
+      c.release(broken ?? (open ? true : undefined));
     }
   }));
 

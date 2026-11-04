@@ -134,7 +134,7 @@ describe("export page over http", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_D
       namespace: "test",
       authenticate: async () => false,
       approve: createApprovalRouter({ publicUrl: ISSUER, pepper, db: appPool, identity, perMinute: 1000 }),
-      exportPage: createExportRouter({ publicUrl: ISSUER, pepper, db: appPool, identity, perMinute: 1000, batch: 2 }),
+      exportPage: createExportRouter({ publicUrl: ISSUER, pepper, db: appPool, identity, perMinute: 1000, batch: 2, stallMs: 3000 }),
       logRequests: false,
     });
     server = await new Promise((resolve) => {
@@ -222,14 +222,13 @@ describe("export page over http", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_D
     assert.match(await again.text(), /already used/);
   });
 
-  test("a download that breaks off is not recorded as delivered, and lets go of its connection", async () => {
-    // Enough rows that the stream fills the socket and has to wait for the browser.
-    for (let i = 0; i < 800; i++) await remember(`export check: filler ${i} ${"x".repeat(30000)}`);
+  const appSessions = async (state: string) => (await admin.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM pg_stat_activity
+     WHERE usename = 'engramport_app' AND state = $1 AND query LIKE 'FETCH%'`, [state])).rows[0].n;
+
+  /** Start a download as a browser that then stops reading, and wait until the stream is held up on it. */
+  async function stalledDownload() {
     const c = await toConfirm();
-    const appSessions = async (state: string) => (await admin.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM pg_stat_activity
-       WHERE usename = 'engramport_app' AND state = $1 AND query LIKE 'FETCH%'`, [state])).rows[0].n;
-    // A browser that starts the download and then stops reading.
     const body = new URLSearchParams({ csrf: c.csrf!, choice: "confirm" }).toString();
     const req = http.request(`${base}/export/download`, {
       method: "POST",
@@ -242,23 +241,52 @@ describe("export page over http", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_D
     });
     assert.equal(response.statusCode, 200);
     response.pause();
-    // Wait until the stream is held up on the browser, between fetches, inside its transaction.
     let waiting = 0;
-    for (let i = 0; i < 50 && !waiting; i++) {
+    for (let i = 0; i < 25 && !waiting; i++) {
       await new Promise((r) => setTimeout(r, 100));
       waiting = await appSessions("idle in transaction");
     }
     assert.equal(waiting, 1, "the stream is waiting on the browser");
-    req.destroy();
-    response.destroy();
+    return { req, response };
+  }
+
+  /** Wait until no export stream holds a transaction open. */
+  async function letGo(ms: number) {
     let stuck = 1;
-    for (let i = 0; i < 50 && stuck; i++) {
+    for (let i = 0; i < ms / 100 && stuck; i++) {
       await new Promise((r) => setTimeout(r, 100));
       stuck = await appSessions("idle in transaction");
     }
-    assert.equal(stuck, 0, "the transaction is rolled back and the connection let go");
+    return stuck;
+  }
+
+  test("a download that breaks off is not recorded as delivered, and lets go of its connection", async () => {
+    // Enough rows that the stream fills the socket and has to wait for the browser.
+    for (let i = 0; i < 800; i++) await remember(`export check: filler ${i} ${"x".repeat(30000)}`);
+    const { req, response } = await stalledDownload();
+    req.destroy();
+    response.destroy();
+    assert.equal(await letGo(2000), 0, "the transaction is rolled back and the connection let go at once");
     const rec = (await exportsOf()).at(-1)!;
     assert.deepEqual([rec.started, rec.completed], [true, false], "started, but not delivered");
+  });
+
+  test("a browser that stops reading but stays connected is let go after a while", async () => {
+    const { req, response } = await stalledDownload();
+    req.on("error", () => undefined);
+    response.on("error", () => undefined);
+    assert.equal(await letGo(8000), 0, "the transaction is rolled back and the connection let go");
+    // Reading again, the browser gets what was already sent and then a cut-off
+    // connection, never a cleanly ended file.
+    const finished = new Promise<boolean>((resolve) => {
+      response.on("close", () => resolve(response.complete));
+      setTimeout(() => resolve(true), 20_000).unref();
+    });
+    response.resume();
+    assert.equal(await finished, false, "the half-sent file is cut off");
+    const rec = (await exportsOf()).at(-1)!;
+    assert.deepEqual([rec.started, rec.completed], [true, false], "started, but not delivered");
+    req.destroy();
   });
 
   test("a revoked grant exports nothing, even after the confirmation page", async () => {

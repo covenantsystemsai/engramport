@@ -179,8 +179,10 @@ How it runs, and why nothing is kept:
    browser in small batches, in one transaction that records the export as
    delivered, with counts. If the browser goes away first, the transaction rolls
    back: the export shows as started but not delivered, and the file the
-   browser got is cut off rather than passed off as whole. To try again, the
-   person signs in again for a new export.
+   browser got is cut off rather than passed off as whole. The same happens if
+   the browser stops taking the file for a minute, or the whole download runs
+   past ten minutes, so a stalled download never holds a database connection.
+   To try again, the person signs in again for a new export.
 
 EngramPort writes no file and keeps no copy. Postgres may use its own temporary
 work space while the query runs, released when it ends. The admin sees who

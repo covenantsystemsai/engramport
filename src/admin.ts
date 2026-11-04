@@ -115,6 +115,33 @@ export interface ConnectionRow {
   last_used_at: Date | null;
 }
 
+export type ApprovalScope = "cell_knowledge" | "company_governance" | "promotion";
+export const APPROVAL_SCOPES: readonly ApprovalScope[] = ["cell_knowledge", "company_governance", "promotion"];
+const CLAIM_TYPE_NAMES = ["observation", "inference", "hypothesis", "proposal", "decision", "fact"] as const;
+
+/**
+ * Who may approve memories where (0015). A row with a parent is a delegation
+ * its holder's grantor made; the admin grants and revokes top-level rows only.
+ */
+export interface AuthorityRow {
+  id: string;
+  actor: string;
+  namespace: string;
+  scope: ApprovalScope;
+  /** null means every claim type. */
+  claim_types: string[] | null;
+  can_delegate: boolean;
+  /** The authority this was delegated from, or null for a top-level grant. */
+  parent_id: string | null;
+  granted_by: string | null;
+  created_at: Date;
+  expires_at: Date | null;
+  revoked_at: Date | null;
+  revoke_reason: string | null;
+  /** Unrevoked, unexpired and held by enabled humans all the way up. */
+  valid: boolean;
+}
+
 export interface MintedKey {
   key: string;
   prefix: string;
@@ -162,6 +189,10 @@ function checkPath(path: string): string[] {
     );
   }
   return parts;
+}
+
+function authorityWhat(a: { claim_types: string[] | null }): string {
+  return a.claim_types ? a.claim_types.join(", ") : "every claim type";
 }
 
 function checkSlug(slug: string, what: string): void {
@@ -653,6 +684,100 @@ export class AdminClient {
     });
   }
 
+  /**
+   * Lets a human actor approve memories in one namespace. The database checks
+   * the scope fits the namespace: cell_knowledge on a client cell,
+   * company_governance on a company namespace, promotion on a tower or city.
+   * The grant is used only through that person's own fresh sign-in.
+   */
+  async grantAuthority(opts: {
+    actor: string;
+    namespace: string;
+    scope: string;
+    claimTypes?: string[];
+    canDelegate?: boolean;
+    expiresInMs?: number;
+  }): Promise<AuthorityRow> {
+    checkSlug(opts.actor, "actor name");
+    checkPath(opts.namespace);
+    if (!(APPROVAL_SCOPES as readonly string[]).includes(opts.scope)) {
+      throw new AdminError(`not an approval scope: ${opts.scope} (one of ${APPROVAL_SCOPES.join(", ")})`);
+    }
+    let claimTypes: string[] | null = null;
+    if (opts.claimTypes !== undefined) {
+      if (!opts.claimTypes.length) throw new AdminError("give at least one claim type, or leave it out for all of them");
+      for (const t of opts.claimTypes) {
+        if (!(CLAIM_TYPE_NAMES as readonly string[]).includes(t)) {
+          throw new AdminError(`not a claim type: ${t} (one of ${CLAIM_TYPE_NAMES.join(", ")})`);
+        }
+      }
+      claimTypes = [...new Set(opts.claimTypes)];
+    }
+    if (opts.expiresInMs !== undefined && opts.expiresInMs <= 0) {
+      throw new AdminError("an authority's expiry must be in the future");
+    }
+    const expiresAt = opts.expiresInMs === undefined ? null : new Date(Date.now() + opts.expiresInMs);
+    return this.tx(async (c) => {
+      const ns = await c.query<{ id: string }>("SELECT id FROM memory.namespaces WHERE path = $1", [opts.namespace]);
+      if (!ns.rows[0]) throw new AdminError(`no namespace ${opts.namespace}`);
+      const actor = await c.query<{ id: string; kind: string; disabled_at: Date | null }>(
+        "SELECT id, kind, disabled_at FROM memory.actors WHERE slug = $1",
+        [opts.actor],
+      );
+      if (!actor.rows[0]) throw new AdminError(`no actor ${opts.actor}`);
+      if (actor.rows[0].kind !== "human") {
+        throw new AdminError(`${opts.actor} is not a human actor; only a person can approve memories`);
+      }
+      if (actor.rows[0].disabled_at) throw new AdminError(`actor ${opts.actor} is disabled`);
+      try {
+        const r = await c.query<{ id: string }>(
+          `INSERT INTO memory.approval_authorities (actor_id, namespace_id, scope, claim_types, can_delegate, expires_at)
+           VALUES ($1, $2, $3::memory.approval_scope, $4::memory.claim_type[], $5, $6) RETURNING id`,
+          [actor.rows[0].id, ns.rows[0].id, opts.scope, claimTypes, opts.canDelegate === true, expiresAt],
+        );
+        return (await this.authorities(c, { id: r.rows[0].id, includeRevoked: true }))[0];
+      } catch (err) {
+        if ((err as { code?: string }).code === "23514") throw new AdminError((err as Error).message);
+        throw err;
+      }
+    });
+  }
+
+  async listAuthorities(opts: { namespace?: string; actor?: string; includeRevoked?: boolean } = {}): Promise<AuthorityRow[]> {
+    if (opts.namespace) checkPath(opts.namespace);
+    if (opts.actor !== undefined) checkSlug(opts.actor, "actor name");
+    return this.tx((c) => this.authorities(c, opts));
+  }
+
+  /**
+   * Ends a top-level authority. Every delegation made from it stops being
+   * valid with it, because validity is checked up the whole chain.
+   */
+  async revokeAuthority(id: string, reason: string): Promise<AuthorityRow> {
+    if (!UUID.test(id)) throw new AdminError(`not an authority id: ${id}`);
+    // A short code, never free text, so the trail holds no names or content.
+    const why = reason.trim();
+    if (!/^[a-z_]{1,32}$/.test(why)) {
+      throw new AdminError("give the reason as a short code of lowercase letters and underscores, such as owner_left");
+    }
+    return this.tx(async (c) => {
+      const cur = await c.query<{ parent_id: string | null; revoked_at: Date | null }>(
+        "SELECT parent_id, revoked_at FROM memory.approval_authorities WHERE id = $1",
+        [id],
+      );
+      if (!cur.rows[0]) throw new AdminError(`no authority ${id}`);
+      if (cur.rows[0].parent_id) {
+        throw new AdminError("that is a delegation; revoke the authority it came from, or its grantor revokes it");
+      }
+      if (cur.rows[0].revoked_at) throw new AdminError(`authority ${id} is already revoked`);
+      await c.query(
+        "UPDATE memory.approval_authorities SET revoked_at = now(), revoke_reason = $2 WHERE id = $1",
+        [id, why],
+      );
+      return (await this.authorities(c, { id, includeRevoked: true }))[0];
+    });
+  }
+
   /** Connections people approved: which client, as which member, and whether it still works. */
   async listConnections(opts: { namespace?: string; email?: string; includeRevoked?: boolean } = {}): Promise<ConnectionRow[]> {
     if (opts.namespace) checkPath(opts.namespace);
@@ -694,6 +819,30 @@ export class AdminClient {
            AND ($4 OR m.revoked_at IS NULL)
          ORDER BY n.path, m.email, a.slug, m.created_at`,
         [f.id ?? null, f.namespace ?? null, f.email ?? null, f.includeRevoked ?? false],
+      )
+    ).rows;
+  }
+
+  private async authorities(
+    c: pg.PoolClient,
+    f: { id?: string; namespace?: string; actor?: string; includeRevoked?: boolean },
+  ): Promise<AuthorityRow[]> {
+    return (
+      await c.query<AuthorityRow>(
+        `SELECT a.id, h.slug AS actor, n.path AS namespace, a.scope::text AS scope,
+                a.claim_types::text[] AS claim_types, a.can_delegate, a.parent_id, g.slug AS granted_by,
+                a.created_at, a.expires_at, a.revoked_at, a.revoke_reason,
+                memory.approval_authority_valid(a.id) AS valid
+         FROM memory.approval_authorities a
+         JOIN memory.actors h ON h.id = a.actor_id
+         JOIN memory.namespaces n ON n.id = a.namespace_id
+         LEFT JOIN memory.actors g ON g.id = a.granted_by_actor_id
+         WHERE ($1::uuid IS NULL OR a.id = $1)
+           AND ($2::text IS NULL OR n.path = $2 OR starts_with(n.path, $2 || '/'))
+           AND ($3::text IS NULL OR h.slug = $3)
+           AND ($4 OR a.revoked_at IS NULL)
+         ORDER BY n.path, h.slug, a.created_at`,
+        [f.id ?? null, f.namespace ?? null, f.actor ?? null, f.includeRevoked ?? false],
       )
     ).rows;
   }
@@ -771,6 +920,19 @@ export const ADMIN_USAGE = `Usage: engramport admin <command>
   member revoke <email> --namespace <path> [--actor <name>]
                                      ends the membership and every connection and
                                      token made through it
+  authority grant <actor> --namespace <path> --scope <scope> [--claim-types a,b]
+                  [--can-delegate] [--expires-in 365d]
+                                     lets a human actor approve memories there,
+                                     only through their own fresh Google sign-in.
+                                     Scopes: cell_knowledge (a client cell),
+                                     company_governance (a company namespace and
+                                     below), promotion (a tower or city, for
+                                     knowledge moving up). No engineering, security,
+                                     money or deploy approval lives here.
+  authority list [--namespace <path>] [--actor <name>] [--all]
+  authority revoke <id> --reason <code>
+                                     the reason is a short code such as owner_left
+                                     ends it and every delegation made from it
   connection list [--namespace <path>] [--email <email>] [--all]
   connection revoke <id>             ends one connection and its tokens; the
                                      membership stays, so they can connect again
@@ -1043,6 +1205,59 @@ export async function runAdmin(argv: string[], open: () => AdminClient, io: Admi
         for (const m of rows) {
           io.out(`${m.email} can no longer connect to ${m.namespace} as ${m.actor}; its connections and tokens are revoked`);
         }
+        return 0;
+      }
+      case "authority grant": {
+        const { positional, flags } = parseFlags(rest, {
+          namespace: "value",
+          scope: "value",
+          "claim-types": "value",
+          "can-delegate": "bool",
+          "expires-in": "value",
+        });
+        const actor = one(positional, "actor name");
+        if (typeof flags.namespace !== "string" || typeof flags.scope !== "string") {
+          throw new UsageError("--namespace and --scope are required");
+        }
+        const a = await db().grantAuthority({
+          actor,
+          namespace: flags.namespace,
+          scope: flags.scope,
+          claimTypes: typeof flags["claim-types"] === "string"
+            ? flags["claim-types"].split(",").map((t) => t.trim()).filter(Boolean)
+            : undefined,
+          canDelegate: flags["can-delegate"] === true,
+          expiresInMs: typeof flags["expires-in"] === "string" ? parseDuration(flags["expires-in"]) : undefined,
+        });
+        io.out(`${a.id}  ${a.actor} may approve ${authorityWhat(a)} in ${a.namespace} (${a.scope})`
+          + `${a.can_delegate ? ", and may delegate" : ""}${a.expires_at ? `, until ${when(a.expires_at)}` : ""}`);
+        return 0;
+      }
+      case "authority list": {
+        const { positional, flags } = parseFlags(rest, { namespace: "value", actor: "value", all: "bool" });
+        if (positional.length) throw new UsageError(`unexpected argument ${positional[0]}`);
+        const rows = await db().listAuthorities({
+          namespace: typeof flags.namespace === "string" ? flags.namespace : undefined,
+          actor: typeof flags.actor === "string" ? flags.actor : undefined,
+          includeRevoked: flags.all === true,
+        });
+        for (const a of rows) {
+          const from = a.parent_id ? `delegated by ${a.granted_by} from ${a.parent_id}` : "granted by admin";
+          const state = a.revoked_at
+            ? `revoked ${when(a.revoked_at)} (${a.revoke_reason})`
+            : a.valid ? "valid" : "not valid (expired, or a holder or grantor lost it)";
+          io.out(`${a.id}  ${a.namespace}  ${a.actor}  ${a.scope}  ${authorityWhat(a)}`
+            + `${a.can_delegate ? "  can delegate" : ""}  ${from}  ${state}`);
+        }
+        if (!rows.length) io.err(flags.all ? "No approval authorities." : "No active approval authorities. Add --all to include revoked ones.");
+        return 0;
+      }
+      case "authority revoke": {
+        const { positional, flags } = parseFlags(rest, { reason: "value" });
+        const id = one(positional, "authority id");
+        if (typeof flags.reason !== "string") throw new UsageError("--reason is required");
+        const a = await db().revokeAuthority(id, flags.reason);
+        io.out(`${a.actor} can no longer approve in ${a.namespace} under ${a.id}; delegations made from it stop too`);
         return 0;
       }
       case "connection list": {

@@ -150,6 +150,7 @@ With `ENGRAMPORT_OAUTH=true`, a hosted server on the Postgres store lets claude.
 | `ENGRAMPORT_SUPABASE_URL` | oauth | The Supabase project whose Auth has the Google provider on. Add `<public URL>/oauth/callback` to that project's allowed redirect URLs. |
 | `ENGRAMPORT_SUPABASE_PUBLISHABLE_KEY` | oauth | That project's publishable key. It is sent to Supabase Auth only. |
 | `ENGRAMPORT_OAUTH_REDIRECT_HOSTS` | no | Hosts a client may register an https redirect on. Default `claude.ai,claude.com`. Loopback `http` is always allowed, for local tools. |
+| `ENGRAMPORT_APPROVAL_PAGE` | no | `true` serves the approval page at `/approve/<memory id>`, where a person with approval authority approves or rejects a memory with their own Google sign-in. Needs OAuth. Off by default. Add `<public URL>/approve/callback` to the Supabase project's allowed redirect URLs too. See [docs/approvals.md](docs/approvals.md). |
 
 Every key on the Postgres store, OAuth or not, is now checked before a request runs, so an unknown, revoked or expired key gets a 401 rather than a tool error.
 

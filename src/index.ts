@@ -74,16 +74,22 @@ async function hostedAuth() {
   const authenticate = (key: string) => store.checkKey(key);
   if (!config.oauth) return { authenticate };
   const { createOAuthRouter, resourceMetadataUrl, supabaseIdentity } = await import("./oauth.js");
+  const identity = supabaseIdentity(config.supabaseUrl, config.supabasePublishableKey);
+  const pepper = decodePepper(config.keyPepper)!;
+  const approve = config.approvalPage
+    ? (await import("./approve.js")).createApprovalRouter({ publicUrl: config.publicUrl, pepper, db: sharedPool(), identity })
+    : undefined;
   return {
     authenticate,
     resourceMetadataUrl: resourceMetadataUrl(config.publicUrl),
     oauth: createOAuthRouter({
       publicUrl: config.publicUrl,
       redirectHosts: config.oauthRedirectHosts,
-      pepper: decodePepper(config.keyPepper)!,
+      pepper,
       db: sharedPool(),
-      identity: supabaseIdentity(config.supabaseUrl, config.supabasePublishableKey),
+      identity,
     }),
+    ...(approve ? { approve } : {}),
   };
 }
 

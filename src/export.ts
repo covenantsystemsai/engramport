@@ -255,6 +255,8 @@ export function createExportRouter(opts: ExportPageOptions): Router {
       await c.query("BEGIN");
       open = true;
       await c.query("SET LOCAL statement_timeout = '120s'");
+      // A stream left waiting on a browser for this long is ended by Postgres itself.
+      await c.query("SET LOCAL idle_in_transaction_session_timeout = '120s'");
       await c.query("DECLARE export_rows NO SCROLL CURSOR FOR SELECT r::text AS line FROM memory.export_rows($1, $2, $3) r",
         [visit.sessionId, visit.exportId, visit.secret]);
       const fetch = async () => (await c.query<{ line: string }>(`FETCH ${batch} FROM export_rows`)).rows;
@@ -278,10 +280,22 @@ export function createExportRouter(opts: ExportPageOptions): Router {
       });
       let closed = false;
       res.on("close", () => { closed = true; });
+      const gone = () => new Error("the browser went away before the export finished");
+      // Wait for the browser to take more, or for it to go away: a closed
+      // response never drains, and the transaction must still end.
+      const drained = () => new Promise<void>((resolve, reject) => {
+        const done = () => { off(); resolve(); };
+        const fail = () => { off(); reject(gone()); };
+        const off = () => { res.off("drain", done); res.off("close", fail); res.off("error", fail); };
+        res.once("drain", done);
+        res.once("close", fail);
+        res.once("error", fail);
+        if (closed || res.destroyed) fail();
+      });
       while (rows.length) {
-        if (closed) throw new Error("the browser went away before the export finished");
+        if (closed || res.destroyed) throw gone();
         const chunk = rows.map((r) => r.line).join("\n") + "\n";
-        if (!res.write(chunk)) await new Promise<void>((resolve) => res.once("drain", () => resolve()));
+        if (!res.write(chunk)) await drained();
         rows = await fetch();
       }
       await c.query("CLOSE export_rows");

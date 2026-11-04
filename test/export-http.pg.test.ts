@@ -7,6 +7,7 @@
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
+import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Server as HttpServer } from "node:http";
 import pg from "pg";
@@ -221,18 +222,41 @@ describe("export page over http", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_D
     assert.match(await again.text(), /already used/);
   });
 
-  test("a download that breaks off is not recorded as delivered", async () => {
-    // Enough rows that the stream can't finish before the browser goes away.
-    for (let i = 0; i < 60; i++) await remember(`export check: filler ${i} ${"x".repeat(4000)}`);
+  test("a download that breaks off is not recorded as delivered, and lets go of its connection", async () => {
+    // Enough rows that the stream fills the socket and has to wait for the browser.
+    for (let i = 0; i < 800; i++) await remember(`export check: filler ${i} ${"x".repeat(30000)}`);
     const c = await toConfirm();
-    const ac = new AbortController();
-    const d = await post("/export/download", c.cookie, { csrf: c.csrf!, choice: "confirm" }, ac.signal);
-    assert.equal(d.status, 200);
-    const reader = d.body!.getReader();
-    await reader.read();
-    ac.abort();
-    await reader.cancel().catch(() => undefined);
-    await new Promise((r) => setTimeout(r, 500));
+    const appSessions = async (state: string) => (await admin.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM pg_stat_activity
+       WHERE usename = 'engramport_app' AND state = $1 AND query LIKE 'FETCH%'`, [state])).rows[0].n;
+    // A browser that starts the download and then stops reading.
+    const body = new URLSearchParams({ csrf: c.csrf!, choice: "confirm" }).toString();
+    const req = http.request(`${base}/export/download`, {
+      method: "POST",
+      headers: { Cookie: c.cookie!, "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(body) },
+    });
+    const response = await new Promise<http.IncomingMessage>((resolve, reject) => {
+      req.on("response", resolve);
+      req.on("error", reject);
+      req.end(body);
+    });
+    assert.equal(response.statusCode, 200);
+    response.pause();
+    // Wait until the stream is held up on the browser, between fetches, inside its transaction.
+    let waiting = 0;
+    for (let i = 0; i < 50 && !waiting; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      waiting = await appSessions("idle in transaction");
+    }
+    assert.equal(waiting, 1, "the stream is waiting on the browser");
+    req.destroy();
+    response.destroy();
+    let stuck = 1;
+    for (let i = 0; i < 50 && stuck; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      stuck = await appSessions("idle in transaction");
+    }
+    assert.equal(stuck, 0, "the transaction is rolled back and the connection let go");
     const rec = (await exportsOf()).at(-1)!;
     assert.deepEqual([rec.started, rec.completed], [true, false], "started, but not delivered");
   });

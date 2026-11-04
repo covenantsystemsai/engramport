@@ -227,6 +227,46 @@ RESET ROLE;
 SELECT t.expect_state('the proposal is still pending', :'p4', 'proposed/pending');
 SELECT t.expect_state('and the approved version still current', :'p1', 'active/approved');
 
+\echo '-- a grant limited to some claim types cannot replace a memory of another type'
+INSERT INTO memory.actors (kind, slug, display_name) VALUES ('human', 'rv-obs', 'Observation approver') RETURNING id AS obs \gset
+INSERT INTO memory.oauth_members (email, namespace_id, actor_id) VALUES ('rv-obs@client.test', :'c1', :'obs');
+SET ROLE engramport_admin;
+INSERT INTO memory.approval_authorities (actor_id, namespace_id, scope, claim_types)
+  VALUES (:'obs', :'c1', 'cell_knowledge', '{observation}') RETURNING id AS a_obs \gset
+RESET ROLE;
+SELECT t.accept(:'a_obs', 'rv-obs@client.test');
+SELECT * FROM t.sign_in('rv-obs@client.test') \gset ob1_
+SELECT * FROM t.sign_in('rv-obs@client.test') \gset ob2_
+SET ROLE engramport_app;
+BEGIN; SELECT t.as_key(:'k_c1', :'c1');
+  SELECT memory.propose_revision(:'p1', 'decision', 'revision check: it was only ever an observation', 'supersede_memory',
+                                 'rest', 'observation', p_dedup_key => 'rv-terms') AS p_obs \gset
+COMMIT;
+SELECT t.expect_error('an observation-only approver cannot review a revision of a decision',
+  format($$SELECT * FROM memory.approval_review(%L, %L, %L)$$, :'ob1_user_id', :'ob1_session_id', :'p_obs'),
+  '%no valid authority%');
+SELECT t.expect_error('or take a challenge for it',
+  format($$SELECT * FROM t.challenge(%L, %L, %L, 'approve')$$, :'ob2_user_id', :'ob2_session_id', :'p_obs'),
+  '%no valid authority%');
+RESET ROLE;
+-- Even a challenge written directly under that authority is refused when deciding.
+SELECT * FROM t.sign_in('rv-obs@client.test') \gset ob3_
+INSERT INTO memory.approval_challenges (actor_id, namespace_id, memory_id, memory_version, content_sha256, action,
+    authority_id, secret_sha256, sign_in_hash, expires_at, base_memory_id)
+  SELECT :'obs', :'c1', id, memory.memory_version(id), content_sha256, 'approve', :'a_obs',
+         sha256(decode(repeat('e', 64), 'hex')), sha256(uuid_send(:'ob3_session_id'::uuid)),
+         now() + interval '10 minutes', :'p1'
+  FROM memory.memories WHERE id = :'p_obs' RETURNING id AS ch_obs \gset
+SET ROLE engramport_app;
+SELECT t.expect_error('and so is a challenge under it',
+  format($$SELECT memory.decide_approval_challenge(%L, %L, %L, %L)$$, :'ob3_user_id', :'ob3_session_id', :'ch_obs', repeat('e', 64)),
+  '%does not cover the version it would replace%');
+RESET ROLE;
+SELECT t.expect_state('the approved decision is untouched', :'p1', 'active/approved');
+SELECT t.expect_state('and the revision still pending', :'p_obs', 'proposed/pending');
+SELECT t.expect_count('an approver covering both can still review it',
+  format($$SELECT 1 FROM memory.approval_review(%L, %L, %L)$$, :'o11_user_id', :'o11_session_id', :'p_obs'), 1);
+
 \echo '-- cross-namespace: the other cell''s approver and keys reach nothing'
 SET ROLE engramport_app;
 SELECT t.expect_error('another cell''s approver cannot take a challenge',

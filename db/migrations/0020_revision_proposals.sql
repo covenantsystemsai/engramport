@@ -206,6 +206,34 @@ $$;
 
 -- ── Reviewing ───────────────────────────────────────────────────────────────
 
+-- The authority this person holds to decide on this memory, or NULL. For a
+-- proposal it must also cover the approved version it would replace, so a
+-- grant limited to some claim types can't replace a memory of another type by
+-- way of a revision that changes the type.
+CREATE FUNCTION memory.decision_authority_for(p_actor uuid, p_memory memory.memories) RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+  SELECT a.id
+  FROM memory.approval_authorities a
+  LEFT JOIN memory.memories b ON p_memory.status = 'proposed' AND b.id = p_memory.supersedes_id
+  WHERE a.id = memory.approval_authority_for(p_actor, p_memory.namespace_id, p_memory.claim_type)
+    AND (p_memory.status <> 'proposed'
+         OR (b.id IS NOT NULL AND (a.claim_types IS NULL OR b.claim_type = ANY (a.claim_types))))
+  UNION ALL
+  -- approval_authority_for picks one authority; when it doesn't cover the base,
+  -- another the person holds may cover both.
+  SELECT a.id
+  FROM memory.approval_authorities a
+  JOIN memory.memories b ON b.id = p_memory.supersedes_id
+  WHERE p_memory.status = 'proposed'
+    AND a.actor_id = p_actor
+    AND a.scope = memory.approval_scope_for(p_memory.namespace_id)
+    AND a.namespace_id IN (SELECT memory.namespace_and_ancestors(p_memory.namespace_id))
+    AND (a.claim_types IS NULL OR (p_memory.claim_type = ANY (a.claim_types) AND b.claim_type = ANY (a.claim_types)))
+    AND memory.approval_authority_valid(a.id)
+  LIMIT 1
+$$;
+REVOKE ALL ON FUNCTION memory.decision_authority_for(uuid, memory.memories) FROM PUBLIC;
+
 -- 0018's review, now also showing, for a proposal, the approved text it would
 -- replace, so the person sees exactly what changes.
 DROP FUNCTION memory.approval_review(uuid, uuid, uuid);
@@ -221,7 +249,7 @@ DECLARE
   m memory.memories;
 BEGIN
   SELECT * INTO m FROM memory.memories mm WHERE mm.id = p_memory_id;
-  IF NOT FOUND OR memory.approval_authority_for(v_actor, m.namespace_id, m.claim_type) IS NULL THEN
+  IF NOT FOUND OR memory.decision_authority_for(v_actor, m) IS NULL THEN
     RAISE EXCEPTION 'memory not found, or you have no valid authority to decide on it' USING ERRCODE = '42501';
   END IF;
   RETURN QUERY
@@ -264,7 +292,7 @@ BEGIN
 
   SELECT * INTO m FROM memory.memories mm WHERE mm.id = p_memory_id;
   IF FOUND THEN
-    v_authority := memory.approval_authority_for(v_actor, m.namespace_id, m.claim_type);
+    v_authority := memory.decision_authority_for(v_actor, m);
   END IF;
   IF v_authority IS NULL THEN
     RAISE EXCEPTION 'memory not found, or you have no valid authority to decide on it' USING ERRCODE = '42501';
@@ -379,6 +407,12 @@ BEGIN
        OR b.approval_state <> 'approved' OR b.namespace_id <> m.namespace_id THEN
       RAISE EXCEPTION 'the approved version this revision would replace has changed; review the current one'
         USING ERRCODE = '55000';
+    END IF;
+    -- The challenge's authority must cover the replaced version's claim type too.
+    IF NOT EXISTS (SELECT 1 FROM memory.approval_authorities a
+                   WHERE a.id = c.authority_id AND (a.claim_types IS NULL OR b.claim_type = ANY (a.claim_types))) THEN
+      RAISE EXCEPTION 'the authority this challenge was issued under does not cover the version it would replace'
+        USING ERRCODE = '42501';
     END IF;
   END IF;
 

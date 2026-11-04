@@ -226,7 +226,9 @@ must never silently displace a human-approved decision.
 - Competing revisions stay separate proposals until each is decided.
 - The person reviews the proposal on the approval page, which shows the proposed
   text next to the approved text it would replace, with both fingerprints. The
-  challenge also binds the approved version it would replace.
+  challenge also binds the approved version it would replace, and the
+  approver's authority must cover the claim types of both, so a grant limited
+  to some claim types can't replace a memory of another type.
 - Approving makes the proposal active and approved and the old version
   superseded, in the decision's own transaction. The old version keeps its
   approval on record.

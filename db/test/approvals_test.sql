@@ -210,20 +210,20 @@ RESET ROLE;
 SELECT t.expect_count('a decision with no request records none',
   format($$SELECT 1 FROM memory.approvals WHERE id = %L AND request_id IS NULL$$, :'ap_obs'), 1);
 
-\echo '-- a changed memory starts over'
+\echo '-- a changed memory starts over, as a proposal the approved one waits on (D-04)'
 SET ROLE engramport_app;
 BEGIN; SELECT t.as_key(:'k_c1', :'c1');
-  SELECT memory.remember('decision', 'approval check: ship on Thursdays', 'remember', 'rest',
-                         p_claim_type => 'decision') AS m_dec2 \gset
-  UPDATE memory.memories SET status = 'superseded' WHERE id = :'m_dec';
-  UPDATE memory.memories SET supersedes_id = :'m_dec' WHERE id = :'m_dec2';
+  SELECT t.expect_denied('an agent cannot supersede an approved memory',
+    format($$UPDATE memory.memories SET status = 'superseded' WHERE id = %L$$, :'m_dec'));
+  SELECT memory.propose_revision(:'m_dec', 'decision', 'approval check: ship on Thursdays', 'remember', 'rest',
+                                 'decision') AS m_dec2 \gset
 COMMIT;
 RESET ROLE;
 SELECT content_sha256 AS h_dec2 FROM memory.memories WHERE id = :'m_dec2' \gset
-SELECT t.expect_count('the new version is not approved',
-  format($$SELECT 1 FROM memory.memories WHERE id = %L AND approval_state = 'none'$$, :'m_dec2'), 1);
-SELECT t.expect_count('the old version keeps its decision',
-  format($$SELECT 1 FROM memory.memories WHERE id = %L AND approval_state = 'approved' AND status = 'superseded'$$, :'m_dec'), 1);
+SELECT t.expect_count('the new version is a pending proposal, not approved',
+  format($$SELECT 1 FROM memory.memories WHERE id = %L AND approval_state = 'pending' AND status = 'proposed'$$, :'m_dec2'), 1);
+SELECT t.expect_count('the old version stays current and approved',
+  format($$SELECT 1 FROM memory.memories WHERE id = %L AND approval_state = 'approved' AND status = 'active'$$, :'m_dec'), 1);
 
 \echo '-- a delegate decides only what was delegated'
 SELECT * FROM t.sign_in('appr-staff@client.test') \gset s1_
@@ -243,6 +243,10 @@ RESET ROLE;
 SELECT t.expect_count('the delegate''s decision names the delegated authority',
   format($$SELECT 1 FROM memory.approvals WHERE id = %L AND authority_id = %L AND decided_by_actor_id = %L$$,
          :'ap_dec2', :'a_staff', :'staff'), 1);
+SELECT t.expect_count('approving the proposal supersedes the old version in the same step',
+  format($$SELECT 1 FROM memory.memories o JOIN memory.memories n ON n.supersedes_id = o.id
+           WHERE o.id = %L AND o.status = 'superseded' AND o.approval_state = 'approved'
+             AND n.id = %L AND n.status = 'active' AND n.approval_state = 'approved'$$, :'m_dec', :'m_dec2'), 1);
 
 \echo '-- revoking the owner stops the delegate from then on'
 SET ROLE engramport_app;

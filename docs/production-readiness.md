@@ -94,7 +94,7 @@ Categories follow section 3 of the directive. "Section" is the directive section
 
 | Capability | Section | What exists | What is missing |
 | --- | --- | --- | --- |
-| Supersession | 6.4 | `dedup_key` versioning with `expected_version`; `supersede_memory`, which names the version it replaces and records why; `memory_history` | An agent can still supersede or retract an approved memory; how that should work is an open decision |
+| Supersession | 6.4 | `dedup_key` versioning with `expected_version`; `supersede_memory`, which names the version it replaces and records why; `memory_history`; an approved memory is revised only by a proposal a person approves (D-04) | No person's retraction path for an approved memory yet |
 | Contradictions | 6.5 | A `contradicts` link kind; `find_conflicts` lists open ones, and one closes when either side is superseded or retracted | An agent can still remove a flag with `unlink`; dismissing a conflict without changing either memory should need a person |
 | Deletion lifecycle | 7 | Retraction | No export, no physical deletion, no deletion verification, nothing for backups |
 | Claim types | 6.1 | `memory_kind` has `decision`, `hypothesis`, `insight`, `fact` | Kind mixes claim type with content type; no approval, verification or lifecycle dimensions |
@@ -126,7 +126,7 @@ Categories follow section 3 of the directive. "Section" is the directive section
 
 ### Requires founder decision
 
-See the decision register in section 4: D-01 to D-08.
+See the decision register in section 4: D-01 to D-09.
 
 ## 4. Founder decision register
 
@@ -138,11 +138,12 @@ is a starting point for that conversation, not an assumption anything is built o
 | D-01 | Automatic extraction of entities and relations | None for the first pilot (option A). Graph rows only when an agent calls `link`. Revisit after the pilot with a named provider | Gate 3 scope |
 | D-02 | Deletion policy: tombstones, retention, backups | Retraction by default; physical deletion only on an owner's request, leaving a tombstone with id, time and requester but no text. No retention period is set until he names one. Backups are described honestly as outside immediate erasure | Gate 2 deletion work |
 | D-03 | Who may approve and who may verify | Only human actors may approve, and only the namespace owner and the founder at first. Agents may propose and may attach evidence; they may not approve or mark verified | Gate 2 trust layer |
-| D-04 | Memory write policy (what must never be stored) | Write the founder's never-store list as policy text first, enforce it later. Not approved yet | Gate 3 |
+| D-04 | Revising an approved memory | Decided Nov 4: an agent's revision is a proposal; the approved version stays current until a person approves the proposal, which then replaces it atomically. See `docs/approvals.md` | Gate 2 trust layer |
 | D-05 | Permission to author deploy files and a setup script (files only) | Yes for files in a PR, with deploy kept as its own later decision | Gate 3 preparation |
 | D-06 | Where the HTTP server runs | Compare Supabase Edge Functions, Cloud Run and Fly.io in a short doc before choosing | Gate 3 |
 | D-07 | The old Cloud Run backend | Require authentication on it, then retire it once the Postgres store is live | Gate 3 |
 | D-08 | npm releases | No release until Gate 3 passes; then a major version whose default store is Postgres | Gate 4 |
+| D-09 | Memory write policy (what must never be stored); numbered D-04 until Nov 4 | Write the founder's never-store list as policy text first, enforce it later. Not approved yet | Gate 3 |
 
 ## 5. Dependency-ordered backlog
 

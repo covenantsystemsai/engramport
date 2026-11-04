@@ -42,7 +42,7 @@ a memory, a field or a tool argument that a writer sets. So:
 | 5 | Tower and city promotion needs separate AN2B governance approval | `promotion` authority, only on a tower or city; every tower or city memory needs it, and it approves nothing in a cell (0015, 0016) |
 | 6 | Engineering, security, financial and deployment approvals stay separate | EngramPort records memory approvals only. No scope here covers anything else |
 | 7 | Approval binds to the exact memory id, version, content digest, action and namespace | A single-use challenge bound to the approver, namespace, action, memory id, version, digest, authority, sign-in and expiry, consumed with the decision (0018) |
-| 8 | A changed or superseded memory needs fresh approval | A change is a new version with a new id and digest, which starts at `none` (0014). A challenge dies if the memory is superseded, retracted, re-versioned or decided by someone else before it is used (0018) |
+| 8 | A changed or superseded memory needs fresh approval | A change is a new version with a new id and digest, which starts at `none` (0014). A challenge dies if the memory is superseded, retracted, re-versioned or decided by someone else before it is used (0018). A revision of an approved memory is a proposal, and the approved version stays current until a person approves it (0020, D-04) |
 | 9 | Revoked authority invalidates future approvals and stops reuse | Validity is checked up the whole chain at the moment of use: unrevoked, unexpired, accepted, enabled humans. Revoking an owner ends every delegation from it. An unused challenge dies with its authority, and a revocation racing a decision is seen (0015, 0017, 0018) |
 | 10 | Full audit provenance, no content for content-blind admins | Authorities, requests and decisions carry ids, actors, namespaces, scopes and times. The admin reads those, never memory text, digest or sign-in (0015, 0016) |
 
@@ -202,6 +202,68 @@ to the cookie. The page loads no scripts, can't be framed, posts only to itself
 and is never cached. A refusal shows the database's own words, so a changed
 memory, a revoked authority or a replayed confirmation says what happened and
 records nothing.
+
+### D-04: revising an approved memory (0019, 0020)
+
+Founder decision D-04: agents propose, people approve, EngramPort preserves history.
+
+**The defect this fixes.** Until 0020 an agent could displace a memory a person
+had approved: new text under its dedup key, `supersede_memory` or
+`delete_memory` all worked, and recall then showed only the unapproved text, so
+the approved decision quietly dropped out of view. An agent-written revision
+must never silently displace a human-approved decision.
+
+**What happens now.**
+
+- An approved memory stays current. An agent's revision of it, through
+  `supersede_memory` or `remember` under its dedup key, is stored as its own row
+  with status `proposed`, its own id, provenance, text and digest, pointing at
+  the approved version it would replace. It is put up for approval at once.
+- Recall and search return only active memories, so a pending, rejected or
+  withdrawn proposal never comes back by default. `memory_history` and
+  `fetch_memory` show proposals, marked as such, to keys that can read the
+  namespace; another cell sees nothing of them.
+- Competing revisions stay separate proposals until each is decided.
+- The person reviews the proposal on the approval page, which shows the proposed
+  text next to the approved text it would replace, with both fingerprints. The
+  challenge also binds the approved version it would replace.
+- Approving makes the proposal active and approved and the old version
+  superseded, in the decision's own transaction. The old version keeps its
+  approval on record.
+- If the approved version was replaced meanwhile, for example by a competing
+  proposal that won, the decision is refused as stale and needs a fresh review.
+  Two competing approvals at the same moment are decided one after the other:
+  one wins and the other is refused.
+- Rejecting changes nothing else; the proposal stays on record as proposed and
+  rejected. Its writer can withdraw an undecided or rejected proposal with
+  `delete_memory`, which retracts it and keeps the text. Rejected and withdrawn
+  proposals are kept until the retention policy (D-02) says otherwise.
+- An agent can't retract an approved memory. No person's retraction path exists
+  yet; it would go through the same approval page.
+
+**How it's enforced.** A lifecycle guard on `memory.memories` holds for every
+role except the decision function:
+
+- Superseded and retracted versions stay that way, and a superseded approved
+  version can't be retracted.
+- The version a memory follows never changes, and a new active version can only
+  follow one that is already superseded.
+- An approved memory leaves `active` only when a person's approval of a revision
+  of it is recorded in the same transaction.
+- A proposal becomes active only when its own approval is, and nothing becomes a
+  proposal after it is written.
+
+**Tests.** `db/test/revision_test.sql` covers an agent's direct attempts, other
+cells, competing proposals, a stale base, replayed challenges, rejection and
+withdrawal, a revoked approver, another cell's approver, a decision rolled back
+after it succeeded, and a failure in its last step. `revision_race_test.sh`
+races two approvals of competing proposals and fails if the approved version's
+lock is removed. Store and page tests cover the same flow through the tools and
+the approval page.
+
+**Not built.** A safety-critical correction would need its own authorized hold
+process; nothing here lets a proposal replace approved knowledge without a
+person's approval.
 
 ## The first pilot owner's scope, not yet provisioned
 

@@ -555,6 +555,112 @@ describe("postgres store", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
     await fails(store.findConflicts(keys.cell1, { limit: 101 }), "invalid");
   });
 
+  /**
+   * A person's decision, recorded the way memory.decide_approval_challenge
+   * records it (the page itself is tested in approve-http.pg.test.ts). For a
+   * proposal, approving it also swaps it for the version it revises.
+   */
+  let person: { actor: string; authority: string } | undefined;
+  const personDecides = async (memoryId: string, action: "approve" | "reject") => {
+    const c = await admin.connect();
+    try {
+      await c.query("BEGIN");
+      const m = (await c.query<{ ns: string; sha: string; claim: string; status: string; base: string | null }>(
+        `SELECT namespace_id AS ns, content_sha256 AS sha, claim_type::text AS claim, status::text AS status,
+                supersedes_id AS base FROM memory.memories WHERE id = $1`, [memoryId])).rows[0];
+      if (!person) {
+        const h = await c.query<{ id: string }>(
+          "INSERT INTO memory.actors (kind, slug, display_name) VALUES ('human', $1, 'Decider') RETURNING id", [`decider-${run}`]);
+        const a = await c.query<{ id: string }>(
+          "INSERT INTO memory.approval_authorities (actor_id, namespace_id, scope) VALUES ($1, $2, 'cell_knowledge') RETURNING id",
+          [h.rows[0].id, m.ns]);
+        person = { actor: h.rows[0].id, authority: a.rows[0].id };
+      }
+      const sess = randomBytes(32);
+      await c.query("INSERT INTO memory.human_sign_ins_used (session_hash, actor_id, purpose) VALUES ($1, $2, 'approve')",
+        [sess, person.actor]);
+      const ch = await c.query<{ id: string }>(
+        `INSERT INTO memory.approval_challenges (actor_id, namespace_id, memory_id, memory_version, content_sha256,
+           action, authority_id, secret_sha256, sign_in_hash, expires_at, base_memory_id)
+         VALUES ($1, $2, $3, memory.memory_version($3), $4, $5, $6, $7, $8, now() + interval '10 minutes', $9) RETURNING id`,
+        [person.actor, m.ns, memoryId, m.sha, action, person.authority, randomBytes(32), sess,
+         m.status === "proposed" ? m.base : null]);
+      await c.query(
+        `INSERT INTO memory.approvals (memory_id, namespace_id, action, scope, claim_type, content_sha256,
+           decided_by_actor_id, authority_id, request_id, sign_in_hash, challenge_id)
+         VALUES ($1, $2, $3, 'cell_knowledge', $4, $5, $6, $7,
+                 (SELECT id FROM memory.approval_requests WHERE memory_id = $1), $8, $9)`,
+        [memoryId, m.ns, action, m.claim, m.sha, person.actor, person.authority, sess, ch.rows[0].id]);
+      await c.query("UPDATE memory.memories SET approval_state = $2 WHERE id = $1",
+        [memoryId, action === "approve" ? "approved" : "rejected"]);
+      if (m.status === "proposed" && action === "approve") {
+        await c.query("UPDATE memory.memories SET status = 'superseded' WHERE id = $1", [m.base]);
+        await c.query("UPDATE memory.memories SET status = 'active' WHERE id = $1", [memoryId]);
+      }
+      await c.query("COMMIT");
+    } catch (err) {
+      await c.query("ROLLBACK");
+      throw err;
+    } finally {
+      c.release();
+    }
+  };
+
+  test("an approved memory stays current: an agent's revision of it becomes a proposal (D-04)", async () => {
+    const v1 = await store.remember(keys.cell1, { content: "Refunds within 30 days", dedupKey: "refunds", claimType: "decision" });
+    await store.requestApproval(keys.cell1, v1.id);
+    await personDecides(v1.id, "approve");
+
+    // Through supersede_memory, and through remember under the same key, from two agents.
+    const p1 = await store.supersede(keys.cell1, { memoryId: v1.id, content: "Refunds within 14 days", reason: "new policy" });
+    const p2 = await store.remember(keys.cell1b, { content: "Refunds within 60 days", dedupKey: "refunds", expectedVersion: v1.id });
+    for (const p of [p1, p2] as Array<{ id: string; proposed?: boolean; revises?: string; status?: string; approval_state?: string }>) {
+      assert.equal(p.proposed, true);
+      assert.equal(p.revises, v1.id);
+      assert.equal(p.status, "proposed");
+      assert.equal(p.approval_state, "pending");
+    }
+    assert.notEqual(p1.id, p2.id, "competing revisions stay separate proposals");
+    assert.equal((await store.fetch(keys.cell1, v1.id)).memory.status, "active");
+    const recalled = await store.recall(keys.cell1, { query: "refunds within days", mode: "keyword", topK: 20 });
+    assert.deepEqual(recalled.results.filter((x) => x.content.startsWith("Refunds")).map((x) => x.id), [v1.id],
+      "recall returns only the approved version while revisions are pending");
+    const proposal = (await store.fetch(keys.cell1, p1.id)).memory;
+    assert.deepEqual([proposal.status, proposal.approval_state, proposal.supersedes], ["proposed", "pending", v1.id]);
+    const hist = await store.history(keys.cell1, v1.id);
+    assert.deepEqual(hist.versions.map((v) => [v.id, v.status]),
+      [[v1.id, "active"], [p1.id, "proposed"], [p2.id, "proposed"]]);
+    assert.equal((hist.versions[1] as { revision_reason?: string }).revision_reason, "new policy");
+
+    // An agent can't retract the approved version, or revise a proposal as if it were current.
+    await fails(store.retract(keys.cell1, v1.id), "forbidden");
+    await fails(store.supersede(keys.cell1, { memoryId: p1.id, content: "Refunds within 7 days", reason: "x" }), "conflict");
+
+    // A person approves one: it becomes current and the approved version superseded, in one step.
+    await personDecides(p1.id, "approve");
+    assert.equal((await store.fetch(keys.cell1, p1.id)).memory.status, "active");
+    assert.equal((await store.fetch(keys.cell1, v1.id)).memory.status, "superseded");
+    const after = await store.recall(keys.cell1, { query: "refunds within days", mode: "keyword", topK: 20 });
+    assert.deepEqual(after.results.filter((x) => x.content.startsWith("Refunds")).map((x) => x.id), [p1.id]);
+    // The competing proposal is left on record, undecided; its writer can withdraw it.
+    assert.equal((await store.fetch(keys.cell1, p2.id)).memory.status, "proposed");
+    assert.equal((await store.retract(keys.cell1b, p2.id)).retracted, true);
+    assert.equal((await store.fetch(keys.cell1, p2.id)).memory.status, "retracted");
+
+    // A rejected revision changes nothing.
+    const p3 = await store.supersede(keys.cell1, { memoryId: p1.id, content: "Refunds never", reason: "x" });
+    await personDecides(p3.id, "reject");
+    assert.deepEqual([(await store.fetch(keys.cell1, p3.id)).memory.status, (await store.fetch(keys.cell1, p3.id)).memory.approval_state],
+      ["proposed", "rejected"]);
+    assert.equal((await store.fetch(keys.cell1, p1.id)).memory.status, "active");
+
+    // An unapproved memory is still revised directly, as before.
+    const plain = await store.remember(keys.cell1, { content: "Doors open at 9" });
+    const next = await store.supersede(keys.cell1, { memoryId: plain.id, content: "Doors open at 8", reason: "winter" });
+    assert.equal((next as { proposed?: boolean }).proposed, undefined);
+    assert.equal((await store.fetch(keys.cell1, plain.id)).memory.status, "superseded");
+  });
+
   test("a new claim type under a dedup key is a new version", async () => {
     const a = await store.remember(keys.cell1, { content: "Move the standup to 10", dedupKey: "standup", claimType: "proposal" });
     const b = await store.remember(keys.cell1, { content: "Move the standup to 10", dedupKey: "standup", claimType: "decision" });

@@ -34,8 +34,8 @@
 --      over the cell; a delegate or a grant holder can't start one. One open
 --      request per cell; it lapses after 7 days.
 --   2. While it is open the cell is frozen: nothing new (memories, revisions,
---      embeddings, graph rows) is written to it, so the operation confirmed is
---      the one previewed.
+--      embeddings, graph rows, provenance) is written to it, so the operation
+--      confirmed is the one previewed.
 --   3. A confirmer whose role covers the cell, who is not the owner who started
 --      it, reviews a fresh preview (counts and a digest of every object it will
 --      erase, never content), takes a single-use challenge bound to that
@@ -362,7 +362,7 @@ DO $$
 DECLARE t text;
 BEGIN
   FOREACH t IN ARRAY ARRAY['memories', 'memory_embeddings', 'entities', 'entity_aliases', 'entity_mentions',
-                           'relations', 'memory_links'] LOOP
+                           'relations', 'memory_links', 'provenance'] LOOP
     EXECUTE format('CREATE TRIGGER %I BEFORE INSERT ON memory.%I FOR EACH ROW EXECUTE FUNCTION memory.cell_frozen_guard()',
                    t || '_cell_frozen', t);
   END LOOP;

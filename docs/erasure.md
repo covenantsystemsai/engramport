@@ -298,7 +298,7 @@ Founder decisions D-02.1 and D-02.1a. The database side is
   can't. One open request per cell; it lapses after 7 days, and the admin can
   cancel it (`engramport admin cell-erasure cancel`).
 - **The cell is frozen** while a request is open: nothing new is written to it
-  (memories, revisions, embeddings, graph rows), so what is confirmed is what
+  (memories, revisions, embeddings, graph rows, provenance), so what is confirmed is what
   was previewed. Every write into a cell shares a lock on the cell's row that
   conflicts with starting and confirming, so a write under way when the owner
   starts finishes first and is counted and erased with the rest, and one that

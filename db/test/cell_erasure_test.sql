@@ -189,6 +189,10 @@ RESET ROLE;
 SELECT t.expect_error('no graph row either',
   format($$INSERT INTO memory.entities (namespace_id, type, name, provenance_id, origin)
            VALUES (%L, 'person', 'Late', %L, 'asserted')$$, :'c2', :'m1_prov'), '%waiting for whole-cell erasure%');
+SELECT t.expect_error('nor a provenance row',
+  format($$INSERT INTO memory.provenance (namespace_id, api_key_id, actor_id, tool, transport, source_ref)
+           SELECT namespace_id, api_key_id, actor_id, 'remember', 'rest', 'https://example.test/late' FROM memory.provenance WHERE id = %L$$,
+         :'m1_prov'), '%waiting for whole-cell erasure%');
 
 \echo '-- a different person with the role confirms'
 SELECT * FROM t.sign_in('er-c2@client.test') \gset o3_

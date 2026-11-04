@@ -15,9 +15,10 @@
 --      challenge, so a sign-in is for one named act.
 --   3. Decide. memory.decide_approval_challenge spends the sign-in and the
 --      challenge together, once. It is refused unless the challenge, its
---      secret and the sign-in match, the challenge is unexpired and unused,
---      the memory is still that active, undecided version with that digest,
---      and the authority is still valid at every link.
+--      secret and the sign-in match, the challenge is unused and still
+--      unexpired by the wall clock when the decision is written, the memory
+--      is still that active, undecided version with that digest, and the
+--      authority is still valid at every link.
 --
 -- So a challenge can't be replayed (it is consumed atomically with the
 -- decision, and the sign-in with it), can't be used by anyone else (it is
@@ -215,6 +216,7 @@ DECLARE
   c memory.approval_challenges;
   m memory.memories;
   v_link uuid;
+  v_chain_expires timestamptz;
   l record;
   v_id uuid;
 BEGIN
@@ -234,7 +236,9 @@ BEGIN
   IF EXISTS (SELECT 1 FROM memory.approvals a WHERE a.challenge_id = c.id) THEN
     RAISE EXCEPTION 'this challenge was already used' USING ERRCODE = '55000';
   END IF;
-  IF c.expires_at <= now() THEN
+  -- Deadlines are read from the wall clock: now() stays at the moment the
+  -- transaction began, which can be long before this call.
+  IF c.expires_at <= clock_timestamp() THEN
     RAISE EXCEPTION 'this challenge has expired; review the memory again' USING ERRCODE = '55000';
   END IF;
 
@@ -243,8 +247,10 @@ BEGIN
   -- lands first and is seen, or waits until after.
   v_link := c.authority_id;
   WHILE v_link IS NOT NULL LOOP
-    SELECT a.id, a.parent_id, a.actor_id INTO l FROM memory.approval_authorities a WHERE a.id = v_link FOR SHARE;
+    SELECT a.id, a.parent_id, a.actor_id, a.expires_at INTO l
+    FROM memory.approval_authorities a WHERE a.id = v_link FOR SHARE;
     PERFORM 1 FROM memory.actors x WHERE x.id = l.actor_id FOR SHARE;
+    v_chain_expires := least(v_chain_expires, l.expires_at);
     v_link := l.parent_id;
   END LOOP;
   IF NOT memory.approval_authority_valid(c.authority_id) THEN
@@ -261,6 +267,15 @@ BEGIN
   IF m.content_sha256 <> c.content_sha256 OR m.namespace_id <> c.namespace_id
      OR memory.memory_version(m.id) <> c.memory_version THEN
     RAISE EXCEPTION 'this memory is not the text you were shown' USING ERRCODE = '55000';
+  END IF;
+
+  -- Waiting for the locks above can take time, so both deadlines are checked
+  -- once more against the wall clock, just before the decision is recorded.
+  IF c.expires_at <= clock_timestamp() THEN
+    RAISE EXCEPTION 'this challenge has expired; review the memory again' USING ERRCODE = '55000';
+  END IF;
+  IF v_chain_expires <= clock_timestamp() THEN
+    RAISE EXCEPTION 'the authority this challenge was issued under is no longer valid' USING ERRCODE = '55000';
   END IF;
 
   INSERT INTO memory.approvals (memory_id, namespace_id, action, scope, claim_type, content_sha256,

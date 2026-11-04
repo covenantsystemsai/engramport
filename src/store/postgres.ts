@@ -124,6 +124,9 @@ const MAX_CONTENT = 32_000;
 const MAX_REASON = 1_000;
 /** Versions read in each direction by history. */
 const MAX_HISTORY = 200;
+const MAX_ERASURE_ITEMS = 100;
+export const ERASURE_REASONS = ["owner_request", "stored_in_error", "legal"] as const;
+export type ErasureReason = (typeof ERASURE_REASONS)[number];
 const CHUNK_CHARS = 2_000;
 const MAX_UPLOAD_CHUNKS = 500;
 const EMBED_BATCH = 100;
@@ -938,6 +941,9 @@ export class PostgresStore {
         [id],
       );
       const p = pre.rows[0];
+      if (p && p.namespace_id === ctx.namespaceId && p.status === "erased") {
+        throw new StoreError("conflict", "this memory was erased; there is nothing left to retract");
+      }
       if (p && p.namespace_id === ctx.namespaceId && p.approval_state === "approved" && p.status !== "retracted") {
         throw new StoreError(
           "forbidden",
@@ -1207,6 +1213,52 @@ export class PostgresStore {
         [ctx.namespaceId, memoryId, extractorId, errorClass, provenanceId],
       );
       return true;
+    });
+  }
+
+  /**
+   * Ask for up to 100 memories in the key's own namespace to be erased: every
+   * version of each, and everything derived from them. Nothing is erased
+   * here. A person with authority over the namespace reviews the request and
+   * decides through their own sign-in; an agent can only ask.
+   */
+  async requestErasure(rawKey: string, input: { memoryIds: string[]; reason: ErasureReason; namespace?: string }) {
+    if (!Array.isArray(input.memoryIds) || input.memoryIds.length === 0) {
+      throw new StoreError("invalid", "memory_ids must name at least one memory");
+    }
+    if (input.memoryIds.length > MAX_ERASURE_ITEMS) {
+      throw new StoreError("invalid", `one request names at most ${MAX_ERASURE_ITEMS} memories; split larger ones`);
+    }
+    if (input.memoryIds.some((id) => typeof id !== "string" || !UUID.test(id))) {
+      throw new StoreError("invalid", "every memory_id must be a valid id");
+    }
+    if (!ERASURE_REASONS.includes(input.reason)) {
+      throw new StoreError("invalid", `reason must be one of ${ERASURE_REASONS.join(", ")}`);
+    }
+    return this.withKey(rawKey, async (c, ctx) => {
+      PostgresStore.checkNamespace(ctx, input.namespace);
+      PostgresStore.requireWrite(ctx);
+      try {
+        const r = await c.query<{ request_id: string }>(
+          "SELECT memory.request_erasure($1::uuid[], $2::memory.erasure_reason) AS request_id",
+          [input.memoryIds, input.reason],
+        );
+        return {
+          request_id: r.rows[0].request_id,
+          memories: [...new Set(input.memoryIds.map((id) => id.toLowerCase()))].length,
+          state: "proposed",
+          note:
+            "Nothing is erased yet. A person with authority over this namespace reviews the request and decides " +
+            "through their own sign-in. Until then every memory named stays as it is.",
+        };
+      } catch (err) {
+        const e = err as { code?: string; message?: string };
+        if (e.code === "P0002") throw new StoreError("not_found", "memory not found");
+        if (e.code === "42501") throw new StoreError("forbidden", e.message ?? "forbidden");
+        if (e.code === "55000") throw new StoreError("conflict", e.message ?? "conflict");
+        if (e.code === "22023") throw new StoreError("invalid", e.message ?? "invalid");
+        throw err;
+      }
     });
   }
 

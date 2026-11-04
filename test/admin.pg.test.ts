@@ -505,6 +505,37 @@ describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABA
     assert.match(out[0], /revoked .* \(owner_left\)$/);
   });
 
+  test("the erasure ledger shows who asked and who decided, never the text, and the admin can't erase", async () => {
+    const k = await admin.mintKey({ namespace: cell, actor: `claude-${run}` });
+    const text = `Erasure ledger check ${run}: a phone number`;
+    const m = await store.remember(k.key, { content: text });
+    const asked = await store.requestErasure(k.key, { memoryIds: [m.id], reason: "owner_request" });
+    const rows = await admin.listErasures({ namespace: city, sinceMs: 3_600_000 });
+    const mine = rows.find((r) => r.id === asked.request_id)!;
+    assert.deepEqual([mine.namespace, mine.reason, mine.state, mine.requested_by, mine.memories, mine.tombstones],
+      [cell, "owner_request", "proposed", `claude-${run}`, 1, 0]);
+    assert.ok(!JSON.stringify(rows).includes("phone number"), "no text in the ledger");
+    await refused(admin.listErasures({ limit: 1001 }), /limit/);
+
+    const out: string[] = [];
+    const io = { out: (l: string) => out.push(l), err: () => undefined };
+    const open = () => new AdminClient(new pg.Pool({ connectionString: urlAs(opsRole, "ops-test-only") }), pepper);
+    assert.equal(await runAdmin(["erasure", "list", "--namespace", cell], open, io), 0);
+    assert.ok(out.some((l) => l.includes(asked.request_id) && l.includes("waiting for a person to decide")));
+    assert.ok(!out.join("\n").includes("phone number"));
+
+    const ops = new pg.Client({ connectionString: urlAs(opsRole, "ops-test-only") });
+    await ops.connect();
+    try {
+      await ops.query("SET ROLE engramport_admin");
+      await assert.rejects(ops.query("SELECT memory.erase_chain($1, NULL, 'restore')", [m.id]), /permission denied/);
+      await assert.rejects(ops.query("SELECT memory.reapply_erasures($1::uuid[])", [[m.id]]), /permission denied/);
+    } finally {
+      await ops.end();
+    }
+    assert.equal((await store.fetch(k.key, m.id)).memory.content, text, "the admin erased nothing");
+  });
+
   test("the approval trail shows who asked, where and when, and never the text", async () => {
     const k = await admin.mintKey({ namespace: cell, actor: `claude-${run}` });
     const text = `Secret pricing rule for approval ${run}`;

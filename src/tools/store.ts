@@ -5,7 +5,7 @@
  * list_namespaces and inspect run against the memory schema, and so do the
  * graph tools link, unlink and get_entity, and supersede_memory and
  * memory_history, which revise a memory by id and list its versions, and
- * find_conflicts. chat, groom,
+ * find_conflicts, and request_erasure. chat, groom,
  * dream and export_graph need the graph and synthesis work that comes in later
  * PRs, so they answer with a clear error instead of reaching the old backend.
  */
@@ -18,7 +18,7 @@ import { Embedder, openAIEmbedder, supabaseEmbedder } from "../embeddings.js";
 import { decodePepper } from "../keys.js";
 import type { LinkInput } from "../store/graph.js";
 import { NOT_ON_POSTGRES } from "./store-definitions.js";
-import { ClaimType, createPool, MEMORY_KINDS, MemoryKind, PostgresStore, RECALL_MODES, RecallMode, StoreError } from "../store/postgres.js";
+import { ClaimType, createPool, ErasureReason, MEMORY_KINDS, MemoryKind, PostgresStore, RECALL_MODES, RecallMode, StoreError } from "../store/postgres.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 
@@ -174,6 +174,14 @@ export async function executeStoreTool(
         return ok(await store.history(key, args.memory_id as string, namespace));
       case "find_conflicts":
         return ok(await store.findConflicts(key, { memoryId: str(args.memory_id), limit: num(args.limit), namespace }));
+      case "request_erasure": {
+        if (!Array.isArray(args.memory_ids)) throw new StoreError("invalid", "memory_ids must be an array of ids");
+        return ok(await store.requestErasure(key, {
+          memoryIds: args.memory_ids as string[],
+          reason: args.reason as ErasureReason,
+          namespace,
+        }));
+      }
       case "list_namespaces":
         return ok(await store.listNamespaces(key));
       case "inspect":

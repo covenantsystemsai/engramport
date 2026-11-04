@@ -79,6 +79,9 @@ async function hostedAuth() {
   const approve = config.approvalPage
     ? (await import("./approve.js")).createApprovalRouter({ publicUrl: config.publicUrl, pepper, db: sharedPool(), identity })
     : undefined;
+  const erase = config.erasurePage
+    ? (await import("./erase.js")).createErasureRouter({ publicUrl: config.publicUrl, pepper, db: sharedPool(), identity })
+    : undefined;
   return {
     authenticate,
     resourceMetadataUrl: resourceMetadataUrl(config.publicUrl),
@@ -90,6 +93,7 @@ async function hostedAuth() {
       identity,
     }),
     ...(approve ? { approve } : {}),
+    ...(erase ? { erase } : {}),
   };
 }
 

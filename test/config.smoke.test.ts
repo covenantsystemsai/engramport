@@ -138,4 +138,12 @@ test("approval page: off by default; when on it needs OAuth for its Google sign-
     /APPROVAL_PAGE needs ENGRAMPORT_OAUTH=true/);
   assert.match(configProblems(resolveConfig(env({ ENGRAMPORT_APPROVAL_PAGE: "true", ENGRAMPORT_API_URL: "https://api.example.com" })), "http")[0],
     /APPROVAL_PAGE needs ENGRAMPORT_STORE=postgres/);
+  // The erasure page is its own setting, off by default, with the same needs.
+  assert.equal(resolveConfig(env({})).erasurePage, false);
+  assert.equal(resolveConfig(env({ ENGRAMPORT_APPROVAL_PAGE: "true" })).erasurePage, false);
+  assert.deepEqual(configProblems(pg({ ...on, ENGRAMPORT_ERASURE_PAGE: "true" }), "http"), []);
+  assert.match(configProblems(pg({ ...on, ENGRAMPORT_OAUTH: "", ENGRAMPORT_ERASURE_PAGE: "true" }), "http").join(" "),
+    /ERASURE_PAGE needs ENGRAMPORT_OAUTH=true/);
+  assert.match(configProblems(resolveConfig(env({ ENGRAMPORT_ERASURE_PAGE: "true", ENGRAMPORT_API_URL: "https://api.example.com" })), "http")[0],
+    /ERASURE_PAGE needs ENGRAMPORT_STORE=postgres/);
 });

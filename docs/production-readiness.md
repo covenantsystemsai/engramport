@@ -95,7 +95,7 @@ Categories follow section 3 of the directive. "Section" is the directive section
 | Capability | Section | What exists | What is missing |
 | --- | --- | --- | --- |
 | Supersession | 6.4 | `dedup_key` versioning with `expected_version`; `supersede_memory`, which names the version it replaces and records why; `memory_history` | An agent can still supersede or retract an approved memory; how that should work is an open decision |
-| Contradictions | 6.5 | A `contradicts` link kind | No review queue, no resolution state, no `find_conflicts` |
+| Contradictions | 6.5 | A `contradicts` link kind; `find_conflicts` lists open ones, and one closes when either side is superseded or retracted | An agent can still remove a flag with `unlink`; dismissing a conflict without changing either memory should need a person |
 | Deletion lifecycle | 7 | Retraction | No export, no physical deletion, no deletion verification, nothing for backups |
 | Claim types | 6.1 | `memory_kind` has `decision`, `hypothesis`, `insight`, `fact` | Kind mixes claim type with content type; no approval, verification or lifecycle dimensions |
 | Telemetry | 15 | Request ids, provenance timestamps | No metrics, no `session_id` filled, no latency or error counts |

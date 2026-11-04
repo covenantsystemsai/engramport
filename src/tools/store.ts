@@ -4,7 +4,8 @@
  * remember, recall, upload, fetch_memory, delete_memory (which retracts),
  * list_namespaces and inspect run against the memory schema, and so do the
  * graph tools link, unlink and get_entity, and supersede_memory and
- * memory_history, which revise a memory by id and list its versions. chat, groom,
+ * memory_history, which revise a memory by id and list its versions, and
+ * find_conflicts. chat, groom,
  * dream and export_graph need the graph and synthesis work that comes in later
  * PRs, so they answer with a clear error instead of reaching the old backend.
  */
@@ -171,6 +172,8 @@ export async function executeStoreTool(
       }
       case "memory_history":
         return ok(await store.history(key, args.memory_id as string, namespace));
+      case "find_conflicts":
+        return ok(await store.findConflicts(key, { memoryId: str(args.memory_id), limit: num(args.limit), namespace }));
       case "list_namespaces":
         return ok(await store.listNamespaces(key));
       case "inspect":

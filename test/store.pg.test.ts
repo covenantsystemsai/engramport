@@ -519,6 +519,42 @@ describe("postgres store", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
     assert.equal(h.versions[0].provenance, null);
   });
 
+  test("find_conflicts lists open contradictions, and one closes when either side is replaced or retracted", async () => {
+    const a = await store.remember(keys.cell1, { content: "Invoices are due in 30 days", claimType: "decision" });
+    const b = await store.remember(keys.cell1b, { content: "Invoices are due in 45 days", claimType: "observation" });
+    const tower = (await store.recall(keys.cell1, { query: "invoices first business day", mode: "keyword" }))
+      .results.find((x) => x.content.startsWith("Tower insight"))!;
+    await store.link(keys.cell1, { memoryId: b.id, memoryLinks: [{ to: a.id, kind: "contradicts" }] });
+    await store.link(keys.cell1, { memoryId: a.id, memoryLinks: [{ to: tower.id, kind: "contradicts" }] });
+    await store.link(keys.cell1, { memoryId: a.id, memoryLinks: [{ to: tower.id, kind: "supports" }] });
+
+    const all = await store.findConflicts(keys.cell1, { memoryId: a.id });
+    assert.equal(all.conflicts.length, 2, "both contradictions, not the supporting link");
+    const pair = all.conflicts.find((x) => x.memories.some((m) => m.id === b.id))!;
+    assert.deepEqual(pair.memories.map((m) => m.id).sort(), [a.id, b.id].sort());
+    assert.ok(pair.flagged_by, "who flagged it shows in the key's own namespace");
+    const decided = pair.memories.find((m) => m.id === a.id)!;
+    assert.equal(decided.claim_type, "decision");
+    assert.equal(decided.approval_state, "none");
+    const viaTool = await executeStoreTool("find_conflicts", { memory_id: b.id }, store, keys.cell1);
+    assert.equal(JSON.parse(viaTool.content[0].text).conflicts.length, 1);
+
+    // Another cell sees none of them; the tower memory's own key doesn't see the cell's flag either.
+    assert.equal((await store.findConflicts(keys.cell2, { memoryId: a.id })).conflicts.length, 0);
+    assert.equal((await store.findConflicts(keys.tower, { memoryId: tower.id })).conflicts.length, 0);
+
+    // Replacing one side closes that conflict; retracting the other side closes the rest.
+    await store.supersede(keys.cell1, { memoryId: b.id, content: "Invoices are due in 30 days", reason: "checked the contract" });
+    const left = await store.findConflicts(keys.cell1, { memoryId: a.id });
+    assert.deepEqual(left.conflicts.map((x) => x.memories.map((m) => m.id).sort()), [[a.id, tower.id].sort()]);
+    await store.retract(keys.cell1, a.id);
+    assert.equal((await store.findConflicts(keys.cell1, { memoryId: a.id })).conflicts.length, 0);
+
+    await fails(store.findConflicts(keys.cell1, { memoryId: "nope" }), "invalid");
+    await fails(store.findConflicts(keys.cell1, { limit: 0 }), "invalid");
+    await fails(store.findConflicts(keys.cell1, { limit: 101 }), "invalid");
+  });
+
   test("a new claim type under a dedup key is a new version", async () => {
     const a = await store.remember(keys.cell1, { content: "Move the standup to 10", dedupKey: "standup", claimType: "proposal" });
     const b = await store.remember(keys.cell1, { content: "Move the standup to 10", dedupKey: "standup", claimType: "decision" });

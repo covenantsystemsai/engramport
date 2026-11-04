@@ -36,10 +36,14 @@ INSERT INTO memory.approval_authorities (actor_id, namespace_id, scope)
 INSERT INTO memory.approval_authorities (actor_id, namespace_id, scope)
   VALUES (:'gov', :'city', 'promotion') RETURNING id AS a_promo \gset
 RESET ROLE;
+SELECT t.accept(:'a_owner', 'appr-owner@client.test');
+SELECT t.accept(:'a_gov', 'appr-gov@an2b.test');
+SELECT t.accept(:'a_promo', 'appr-gov@an2b.test');
 SELECT * FROM t.sign_in('appr-owner@client.test') \gset d_
 SET ROLE engramport_app;
 SELECT memory.delegate_approval_authority(:'d_user_id', :'d_session_id', :'a_owner', :'staff', '{decision}') AS a_staff \gset
 RESET ROLE;
+SELECT t.accept(:'a_staff', 'appr-staff@client.test');
 
 -- Memories the agent wrote.
 SET ROLE engramport_app;

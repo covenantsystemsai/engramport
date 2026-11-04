@@ -138,7 +138,10 @@ export interface AuthorityRow {
   expires_at: Date | null;
   revoked_at: Date | null;
   revoke_reason: string | null;
-  /** Unrevoked, unexpired and held by enabled humans all the way up. */
+  /** Whether the holder has accepted the grant with their own sign-in (0017). */
+  acceptance: "pending" | "accepted" | "rejected";
+  decided_at: Date | null;
+  /** Accepted, unrevoked, unexpired and held by enabled humans all the way up. */
   valid: boolean;
 }
 
@@ -873,8 +876,11 @@ export class AdminClient {
         `SELECT a.id, h.slug AS actor, n.path AS namespace, a.scope::text AS scope,
                 a.claim_types::text[] AS claim_types, a.can_delegate, a.parent_id, g.slug AS granted_by,
                 a.created_at, a.expires_at, a.revoked_at, a.revoke_reason,
+                CASE d.decision WHEN 'accept' THEN 'accepted' WHEN 'reject' THEN 'rejected' ELSE 'pending' END AS acceptance,
+                d.decided_at,
                 memory.approval_authority_valid(a.id) AS valid
          FROM memory.approval_authorities a
+         LEFT JOIN memory.approval_authority_decisions d ON d.authority_id = a.id
          JOIN memory.actors h ON h.id = a.actor_id
          JOIN memory.namespaces n ON n.id = a.namespace_id
          LEFT JOIN memory.actors g ON g.id = a.granted_by_actor_id
@@ -1276,6 +1282,7 @@ export async function runAdmin(argv: string[], open: () => AdminClient, io: Admi
         });
         io.out(`${a.id}  ${a.actor} may approve ${authorityWhat(a)} in ${a.namespace} (${a.scope})`
           + `${a.can_delegate ? ", and may delegate" : ""}${a.expires_at ? `, until ${when(a.expires_at)}` : ""}`);
+        io.out("It counts only once they accept it with their own Google sign-in.");
         return 0;
       }
       case "authority list": {
@@ -1290,7 +1297,9 @@ export async function runAdmin(argv: string[], open: () => AdminClient, io: Admi
           const from = a.parent_id ? `delegated by ${a.granted_by} from ${a.parent_id}` : "granted by admin";
           const state = a.revoked_at
             ? `revoked ${when(a.revoked_at)} (${a.revoke_reason})`
-            : a.valid ? "valid" : "not valid (expired, or a holder or grantor lost it)";
+            : a.acceptance === "pending" ? "waiting for the holder to accept"
+            : a.acceptance === "rejected" ? `rejected by the holder ${when(a.decided_at!)}`
+            : a.valid ? `valid, accepted ${when(a.decided_at!)}` : "not valid (expired, or a holder or grantor lost it)";
           io.out(`${a.id}  ${a.namespace}  ${a.actor}  ${a.scope}  ${authorityWhat(a)}`
             + `${a.can_delegate ? "  can delegate" : ""}  ${from}  ${state}`);
         }

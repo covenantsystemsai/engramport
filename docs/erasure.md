@@ -47,7 +47,7 @@ Founder decision D-02, decided Nov 4:
 | The owner's page to review and confirm: `/erase/<request id>` | Built, off unless `ENGRAMPORT_ERASURE_PAGE=true` |
 | Export by an owner: `/export` | Built, off unless `ENGRAMPORT_EXPORT_PAGE=true`; see Export below |
 | Delegated erase and export grants | Built in the database (`0024_data_grants.sql`); the page where owners give them and holders accept them is next |
-| Whole-cell erasure with a cell-erasure-confirmer (D-02.1a) | To build |
+| Whole-cell erasure with a cell-erasure-confirmer (D-02.1a) | Built in the database (`0026_cell_erasure.sql`) with the admin commands `confirmer` and `cell-erasure`; the pages for starting, confirming and accepting the role are next. See Whole-cell erasure below |
 | 30-day retraction restore window | Built in the database (`0025_retraction_restore.sql`) with the admin ledger `engramport admin restore list`; the restore page is next. See Retraction and restoring below |
 
 ## The page
@@ -143,6 +143,13 @@ back. Before the restored database serves anyone:
    `SELECT memory.reapply_erasures($1::uuid[])` with every id from the ledger. It
    erases each again, writes a restore tombstone, and is safe to run twice.
 4. Check the result counts, then turn the app back on.
+
+A whole-cell erasure also removes graph rows that no memory id names. For each
+completed one in the ledger (`engramport admin cell-erasure list`: the cell and
+when it completed), also run, as the database owner,
+`SELECT memory.reapply_cell_erasure($1::uuid, $2::timestamptz)` with the cell's
+id and that time. It erases again everything that was in the cell at that time,
+leaves what was written after, and is safe to run twice.
 
 Supabase keeps daily backups for 7 days on the Pro plan, and single rows can't be
 removed from them. So erased text can remain in a backup for up to 7 days after
@@ -268,3 +275,52 @@ Founder decision D-02.3. The database side is
 
 The page where a person reviews a retracted memory and restores it is next;
 until then these are database functions only.
+
+## Whole-cell erasure
+
+Founder decisions D-02.1 and D-02.1a. The database side is
+`db/migrations/0026_cell_erasure.sql`; its tests are
+`db/test/cell_erasure_test.sql`.
+
+- **The confirmer role.** The admin assigns the cell-erasure-confirmer role to
+  one named person who belongs to AN2B (an enabled person with a sign-in
+  membership of a company namespace), over a scope (it covers the cells at or
+  under that namespace), for at most a year: `engramport admin confirmer assign
+  <actor> --scope <path> --expires-in 90d`. It counts only once that person
+  accepts its exact terms with their own fresh sign-in
+  (`memory.pending_confirmer_roles`, `memory.decide_confirmer_role`), and only
+  while it is unrevoked, unexpired and they still belong to AN2B. It grants
+  nothing else: no approval and no reading of memories.
+- **Starting.** Only the cell's owner (a direct, unrestricted, valid approval
+  authority over the cell) starts one, with their own fresh sign-in, after a
+  preview of counts (`memory.cell_erasure_preview`,
+  `memory.request_cell_erasure`). Delegates, grant holders, agents and the admin
+  can't. One open request per cell; it lapses after 7 days, and the admin can
+  cancel it (`engramport admin cell-erasure cancel`).
+- **The cell is frozen** while a request is open: nothing new is written to it
+  (memories, revisions, embeddings, graph rows), so what is confirmed is what
+  was previewed.
+- **Confirming.** A different person whose confirmer role covers the cell sees
+  the open requests (`memory.pending_cell_erasures`), reviews fresh counts and a
+  digest of the ids of everything that will go, never content
+  (`memory.cell_erasure_review`), takes a single-use challenge bound to that
+  digest (`memory.issue_cell_erasure_challenge`), and confirms with their own
+  fresh sign-in (`memory.decide_cell_erasure_challenge`). The owner who started
+  it can't confirm it, even holding the role.
+- **The decision** spends the sign-in and the challenge, holds the role, the
+  confirmer and their AN2B membership, the owner's authority chain and the cell
+  still, checks each again by the wall clock, and refuses if the cell changed.
+  Then it erases every memory version (each with a content-free tombstone naming
+  the request), every embedding and every graph row in the cell, asserted ones
+  included, scrubs the cell's provenance of anything content-derived, verifies
+  nothing is left, and records the counts. All of it, or none of it. The cell
+  stays, and takes new writes again as new submissions.
+- **The record.** The request names who started it, under which authority, who
+  confirmed it, under which role, the digest confirmed and what was removed.
+  Requests, challenges and roles are records. None holds text or a digest of
+  text. The admin sees them (`engramport admin cell-erasure list`,
+  `engramport admin confirmer list`), never content or secrets, and can't start
+  or confirm one.
+
+The pages where an owner starts one, a confirmer confirms one, and a person
+accepts the role are next; until then these are database functions only.

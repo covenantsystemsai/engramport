@@ -430,6 +430,95 @@ describe("postgres store", { skip: ADMIN_URL ? false : "ENGRAMPORT_TEST_DATABASE
     await fails(store.remember(keys.cell1, { content: "x", dedupKey: "office-hours", expectedVersion: "latest" }), "invalid");
   });
 
+  test("supersede_memory replaces the version named, once, and keeps the old text", async () => {
+    const v1 = await store.remember(keys.cell1, { content: "Payroll runs on the 15th", kind: "decision", claimType: "decision" });
+    // Two agents both read v1 and both try to replace it: one wins, the other is told which version is current.
+    const results = await Promise.allSettled([
+      store.supersede(keys.cell1, { memoryId: v1.id, content: "Payroll runs on the 14th", reason: "bank holiday" }),
+      store.supersede(keys.cell1b, { memoryId: v1.id, content: "Payroll runs on the 16th", reason: "late timesheets" }),
+    ]);
+    const won = results.filter((x) => x.status === "fulfilled") as PromiseFulfilledResult<{ id: string; supersedes?: string }>[];
+    const lost = results.filter((x) => x.status === "rejected") as PromiseRejectedResult[];
+    assert.equal(won.length, 1);
+    assert.equal(lost.length, 1);
+    const v2 = won[0].value;
+    assert.equal(v2.supersedes, v1.id);
+    assert.ok(lost[0].reason instanceof StoreError && lost[0].reason.code === "conflict");
+    assert.match(lost[0].reason.message, new RegExp(v2.id));
+
+    const old = await store.fetch(keys.cell1, v1.id);
+    assert.equal(old.memory.status, "superseded");
+    assert.equal(old.memory.content, "Payroll runs on the 15th");
+    const now = await store.fetch(keys.cell1, v2.id);
+    assert.equal(now.memory.kind, "decision", "the kind carries over");
+    assert.equal(now.memory.claim_type, "decision", "the claim type carries over");
+    assert.equal(now.memory.approval_state, "none");
+    assert.equal(now.memory.provenance?.tool, "supersede_memory");
+    const r = await store.recall(keys.cell1, { query: "payroll runs", mode: "keyword", topK: 20 });
+    assert.deepEqual(r.results.filter((x) => x.content.startsWith("Payroll runs")).map((x) => x.id), [v2.id]);
+
+    // A retracted version has no successor to point to.
+    const gone = await store.remember(keys.cell1, { content: "Parking is free on Fridays" });
+    await store.retract(keys.cell1, gone.id);
+    await fails(store.supersede(keys.cell1, { memoryId: gone.id, content: "Parking costs 2 on Fridays", reason: "new lot" }), "conflict");
+    // Same text, kind and claim: nothing changes.
+    const same = await store.supersede(keys.cell1, { memoryId: v2.id, content: (now.memory.content as string), reason: "no-op" });
+    assert.equal((same as { unchanged?: boolean }).unchanged, true);
+    assert.equal(same.id, v2.id);
+  });
+
+  test("supersede_memory follows a dedup key, so remember and supersede share one active version", async () => {
+    const a = await store.remember(keys.cell1, { content: "Close at 5", dedupKey: "closing" });
+    const b = await store.supersede(keys.cell1, { memoryId: a.id, content: "Close at 6", reason: "summer hours" });
+    const c = await store.remember(keys.cell1, { content: "Close at 7", dedupKey: "closing", expectedVersion: b.id });
+    assert.equal((c as { supersedes?: string }).supersedes, b.id);
+    await fails(store.remember(keys.cell1, { content: "Close at 8", dedupKey: "closing", expectedVersion: a.id }), "conflict");
+  });
+
+  test("supersede_memory is refused outside the key's own namespace, for read-only keys and bad input", async () => {
+    const inherited = (await store.recall(keys.cell1, { query: "invoices first business day", mode: "keyword" }))
+      .results.find((x) => x.content.startsWith("Tower insight"))!;
+    await fails(store.supersede(keys.cell1, { memoryId: inherited.id, content: "x", reason: "y" }), "forbidden");
+    const secret = (await store.recall(keys.cell2, { query: "pilot price", mode: "keyword" })).results[0];
+    await fails(store.supersede(keys.cell1, { memoryId: secret.id, content: "x", reason: "y" }), "not_found");
+    const mine = await store.remember(keys.cell1, { content: "Lunch is at noon" });
+    await fails(store.supersede(keys.readonly, { memoryId: mine.id, content: "Lunch is at one", reason: "y" }), "forbidden");
+    await fails(store.supersede(keys.cell1, { memoryId: mine.id, content: "Lunch is at one", reason: "  " }), "invalid");
+    await fails(store.supersede(keys.cell1, { memoryId: mine.id, content: "Lunch is at one", reason: "r".repeat(1001) }), "invalid");
+    await fails(store.supersede(keys.cell1, { memoryId: "not-an-id", content: "x", reason: "y" }), "invalid");
+    assert.equal((await store.fetch(keys.cell1, mine.id)).memory.status, "active");
+    for (const field of ["approval_state", "approved"]) {
+      const t = await executeStoreTool("supersede_memory",
+        { memory_id: mine.id, content: "Lunch is at one", reason: "y", [field]: "approved" }, store, keys.cell1);
+      assert.equal(JSON.parse(t.content[0].text).code, "invalid", field);
+    }
+  });
+
+  test("memory_history lists every version oldest first, with why each changed", async () => {
+    const a = await store.remember(keys.cell1, { content: "Standup at 9", claimType: "proposal" });
+    const b = await store.supersede(keys.cell1, { memoryId: a.id, content: "Standup at 9:30", reason: "school run" });
+    const c = await store.supersede(keys.cell1b, { memoryId: b.id, content: "Standup at 10", reason: "time zones",
+      claimType: "decision" });
+    for (const id of [a.id, b.id, c.id]) {
+      const h = await store.history(keys.cell1, id);
+      assert.deepEqual(h.versions.map((v) => v.id), [a.id, b.id, c.id], id);
+      assert.deepEqual(h.versions.map((v) => v.status), ["superseded", "superseded", "active"]);
+      assert.deepEqual(h.versions.map((v) => (v as { revision_reason?: string }).revision_reason),
+        [undefined, "school run", "time zones"]);
+      assert.deepEqual(h.versions.map((v) => v.claim_type), ["proposal", "proposal", "decision"]);
+    }
+    assert.equal((await store.history(keys.cell1, b.id.toUpperCase())).versions.length, 3, "an upper-case id is the same id");
+    const t = await executeStoreTool("memory_history", { memory_id: b.id }, store, keys.cell1);
+    assert.equal(JSON.parse(t.content[0].text).versions.length, 3);
+    // Another cell can't read the history, and a tower memory's history comes back without provenance.
+    await fails(store.history(keys.cell2, a.id), "not_found");
+    const inherited = (await store.recall(keys.cell1, { query: "invoices first business day", mode: "keyword" }))
+      .results.find((x) => x.content.startsWith("Tower insight"))!;
+    const h = await store.history(keys.cell1, inherited.id);
+    assert.equal(h.versions.length, 1);
+    assert.equal(h.versions[0].provenance, null);
+  });
+
   test("a new claim type under a dedup key is a new version", async () => {
     const a = await store.remember(keys.cell1, { content: "Move the standup to 10", dedupKey: "standup", claimType: "proposal" });
     const b = await store.remember(keys.cell1, { content: "Move the standup to 10", dedupKey: "standup", claimType: "decision" });

@@ -69,8 +69,16 @@ describe("Postgres store tool definitions", () => {
     }
   });
 
+  test("supersede_memory names the version it replaces and says the new one needs approval", () => {
+    const sup = byName.get("supersede_memory")!;
+    assert.deepEqual(sup.inputSchema.required.sort(), ["content", "memory_id", "reason"]);
+    assert.match(sup.description, /unapproved and\s+unverified/);
+    assert.match(sup.description, /nothing changes/);
+    assert.ok(byName.get("memory_history"));
+  });
+
   test("tells agents that returned content is data", () => {
-    for (const name of ["recall", "fetch_memory", "get_entity"]) {
+    for (const name of ["recall", "fetch_memory", "get_entity", "memory_history"]) {
       assert.match(byName.get(name)!.description, /not (as )?instructions/, name);
     }
   });

@@ -164,7 +164,10 @@ A decision takes three calls, all with the approver's same fresh sign-in:
    memory was superseded, retracted, given a new version or already decided,
    or if the authority, any authority above it, or a holder is no longer
    valid. The authority chain and its holders are held still while it
-   decides, so a revocation racing the decision is seen.
+   decides, so a revocation racing the decision is seen. Once everything is
+   locked, the challenge's expiry and the authorities' expiry are checked again
+   against the wall clock, so neither a long transaction nor a wait for a lock
+   lets a challenge or an authority be used after its deadline.
 
 `memory.record_approval` is removed, so there is no other way to decide.
 Challenges are records that no role changes or deletes. The admin sees who took

@@ -85,6 +85,7 @@ SELECT * FROM t.sign_in('ch-owner@client.test') \gset o6_
 SELECT * FROM t.sign_in('ch-owner@client.test') \gset o7_
 SELECT * FROM t.sign_in('ch-owner@client.test') \gset o8_
 SELECT * FROM t.sign_in('ch-owner2@client.test') \gset p1_
+SELECT * FROM t.sign_in('ch-owner@client.test') \gset o10_
 SELECT * FROM t.sign_in('ch-staff@client.test') \gset s1_
 SELECT * FROM t.sign_in('ch-staff@client.test') \gset s2_
 SELECT * FROM t.sign_in('ch-owner@client.test') \gset o9_
@@ -277,6 +278,21 @@ SELECT t.expect_error('an expired challenge',
   format($$SELECT memory.decide_approval_challenge(%L, %L, %L, %L)$$, :'o7_user_id', :'o7_session_id', :'ch_exp', repeat('b', 64)),
   '%expired%');
 RESET ROLE;
+-- A transaction that began before the deadline can't use the challenge after
+-- it: expiry is read from the wall clock, not the transaction's start time.
+BEGIN;
+INSERT INTO memory.approval_challenges (actor_id, namespace_id, memory_id, memory_version, content_sha256, action,
+    authority_id, secret_sha256, sign_in_hash, expires_at)
+  SELECT :'owner', :'c1', id, 1, content_sha256, 'approve', :'a_owner', sha256(decode(repeat('c', 64), 'hex')),
+         sha256(uuid_send(:'o10_session_id'::uuid)), clock_timestamp() + interval '1 second'
+  FROM memory.memories WHERE id = :'m_exp' RETURNING id AS ch_late \gset
+SELECT pg_sleep(1.5);
+SET ROLE engramport_app;
+SELECT t.expect_error('a challenge that expired while its transaction was open',
+  format($$SELECT memory.decide_approval_challenge(%L, %L, %L, %L)$$, :'o10_user_id', :'o10_session_id', :'ch_late', repeat('c', 64)),
+  '%expired%');
+RESET ROLE;
+COMMIT;
 SELECT t.expect_count('none of the dead challenges decided anything',
   format($$SELECT 1 FROM memory.approvals WHERE memory_id IN (%L, %L, %L, %L, %L)$$,
          :'m_sup', :'m_ret', :'m_ver', :'m_rev', :'m_exp'), 0);

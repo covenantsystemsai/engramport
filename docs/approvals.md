@@ -36,13 +36,13 @@ a memory, a field or a tool argument that a writer sets. So:
 | 1 | The founder approves within explicitly assigned company scopes | `company_governance` authority, granted per company namespace (0015) |
 | 2 | Each client namespace owner approves within their own cell | `cell_knowledge` authority, granted on one client cell (0015) |
 | 3 | Owners delegate limited authority through an explicit, auditable grant | `memory.delegate_approval_authority`: fresh sign-in, same namespace and scope, same or fewer claim types, no later expiry, no re-delegation (0015) |
-| 4 | Agents propose and recommend, never approve or impersonate a person | Authority is human-only; approval needs a human sign-in; the trust guard refuses every other change (0014, 0015, next PR) |
-| 5 | Tower and city promotion needs separate AN2B governance approval | `promotion` authority, only on a tower or city, never usable for an ordinary memory (0015) |
+| 4 | Agents propose and recommend, never approve or impersonate a person | Authority is human-only; a decision needs a human sign-in; agents can only ask; the trust guard refuses every other change (0014, 0015, 0016) |
+| 5 | Tower and city promotion needs separate AN2B governance approval | `promotion` authority, only on a tower or city; every tower or city memory needs it, and it approves nothing in a cell (0015, 0016) |
 | 6 | Engineering, security, financial and deployment approvals stay separate | EngramPort records memory approvals only. No scope here covers anything else |
-| 7 | Approval binds to the exact memory id, version, content digest, action and namespace | Approval events (next PR). Each version is its own memory row, so the id pins the version |
-| 8 | A changed or superseded memory needs fresh approval | A change is a new version with a new id and digest, which starts at `none` (0014). Approving checks the memory is still active (next PR) |
+| 7 | Approval binds to the exact memory id, version, content digest, action and namespace | `memory.approvals` (0016). Each version is its own memory row, so the id pins the version |
+| 8 | A changed or superseded memory needs fresh approval | A change is a new version with a new id and digest, which starts at `none` (0014). Deciding checks it is still the active version and the digest matches (0016) |
 | 9 | Revoked authority invalidates future approvals and stops reuse | Validity is checked up the whole chain at the moment of use: unrevoked, unexpired, enabled humans. Revoking an owner ends every delegation from it (0015) |
-| 10 | Full audit provenance, no content for content-blind admins | Authorities and approval events carry ids, actors, namespaces, scopes and times. The admin reads those, never memory text or its digest (0015, next PR) |
+| 10 | Full audit provenance, no content for content-blind admins | Authorities, requests and decisions carry ids, actors, namespaces, scopes and times. The admin reads those, never memory text, digest or sign-in (0015, 0016) |
 
 ## What is built
 
@@ -71,16 +71,45 @@ a memory, a field or a tool argument that a writer sets. So:
   engramport admin authority revoke <id> --reason <code>
   ```
 
-**Next: approval events (0016).** An agent can ask for approval, which marks a
-memory `pending`. A person approves or rejects through a function that takes
-their fresh sign-in, the memory id, the action and the content digest they were
-shown. It checks the memory is active, its digest still matches, and a valid
-authority covers its namespace, scope and claim type. Only that function can
-move `approval_state`. The admin sees who decided what and when, not the text.
+**PR 42 (migration 0016, approval events)**
 
-**After that: the approval page.** A small page where the person signs in with
-Google in their own browser, sees the memory, and approves or rejects it. It is
-deliberately a page and not an MCP tool.
+- `memory.request_approval(memory_id)`: a writer, usually an agent, asks for
+  approval of an active memory in its key's own namespace. The memory becomes
+  `pending`. Asking again returns the same request. Agents reach it through the
+  `request_approval` tool, which asks and nothing more.
+- `memory.record_approval(user, session, memory_id, approve|reject, sha256)`:
+  a person decides on one memory version. It takes their fresh, single-use
+  sign-in and the digest of the text they were shown. Someone with no authority
+  gets the same answer whether or not the memory exists. Then the memory must
+  still be the active version, not decided yet, and match the digest.
+- The scope comes from where the memory lives:
+
+  | Memory lives in | Needs | Granted on |
+  |---|---|---|
+  | a client cell | `cell_knowledge` | that cell |
+  | a company cell | `company_governance` | that cell or a namespace above it |
+  | any tower or city | `promotion` | that tower or city, or the city above it |
+
+  So company governance alone never approves tower or city knowledge.
+- `memory.approval_requests` and `memory.approvals` are append-only, for every
+  role. There is one request and one decision per memory version.
+- The trust guard from 0014 now lets `approval_state` move only to match a
+  request or decision recorded for that memory in the same transaction. Claim
+  type and verification still never change in place.
+- `fetch_memory` shows the trail: who asked and when, and who decided, what,
+  when and under which scope. It never shows the digest or the sign-in.
+- The admin reads who asked and who decided, where and under which authority:
+  `engramport admin approval list [--namespace <path>] [--since 7d]`. It never
+  sees the text, the digest or the sign-in, and it cannot decide.
+- Decisions made before an authority was revoked stay on the record, with the
+  authority they used. Nothing approved is held back to be applied later, so
+  there is no unused approval to replay.
+
+**Next: the approval page.** A small page where the person signs in with
+Google in their own browser, sees the memory, and approves or rejects it. It
+calls `record_approval` with that sign-in and the digest of what it showed. It
+is deliberately a page and not an MCP tool, so an agent holding the person's
+connection still can't approve.
 
 ## The first pilot owner's scope, not yet provisioned
 
@@ -92,8 +121,9 @@ yes from the founder.
 3. Grant the owner `cell_knowledge` authority on the pilot cell, with `--can-delegate` if they will hand some approval to staff. Narrow it with `--claim-types` if only some kinds of claim should need their approval, and give it an expiry that matches the pilot.
 4. If the owner delegates, they do it themselves through their own sign-in; the admin cannot do it for them.
 
-Until then the pilot cell can be written to and read as usual. Nothing in it
-can be approved, because no one there holds authority yet.
+Until then the pilot cell can be written to and read as usual, and agents can
+ask for approval. Nothing in it can be approved, because no one there holds
+authority yet.
 
 The founder's own `company_governance` authority, on the company namespace, is
 provisioned the same way and is also left for its own yes. So is any
@@ -151,10 +181,17 @@ here so they are known:
   been applied to any real database.
 
 **PR 42 (0016).** Codex reviewed head `8ef38ec` and raised no findings. PR 42
-is held until PR 41 merges; it then takes PR 41's fixes, is verified again, and
-is reviewed again on its new head before it is retargeted to main.
+now carries PR 41's fixes, and in line with L5 its approval records also refuse
+truncation by any role. Local verification on that revision: database suite
+484 checks plus the two race checks passed, unit tests 77 passed, store and database tests 90 passed,
+typecheck clean. It needs a fresh review on its new head, and is held until
+PR 41 merges before it is retargeted to main.
 
-**Merge decisions.** PR 41 is not merged yet: the review found issues, so the
-fixes go back to the founder before the merge. PR 42 stays open. Neither
-migration is applied to the live project, no owner is provisioned and no live
-authority is granted.
+**Merge decisions.** The review found issues on PR 41's first version, so the
+fixes went back to the founder before any merge. On the founder's yes, PR 41
+was merged at its verified head `2107f91` (all checks green, no open findings)
+as `038c206` on main. PR 42 was then retargeted to main and stays open for its
+own review and decision. Neither migration is applied to the live project, no
+owner is provisioned and no live authority is granted. Still open for the
+founder: whether a new approver must accept a grant with their own sign-in, and
+tying each sign-in to one named act on the approval page.

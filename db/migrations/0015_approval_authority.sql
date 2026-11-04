@@ -167,7 +167,7 @@ CREATE TRIGGER approval_authorities_shape BEFORE INSERT OR UPDATE ON memory.appr
 CREATE FUNCTION memory.approval_record_kept() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog AS $$
 BEGIN
-  RAISE EXCEPTION '% is a record and is never deleted', TG_TABLE_NAME USING ERRCODE = '42501';
+  RAISE EXCEPTION '% is a record and is never changed or deleted', TG_TABLE_NAME USING ERRCODE = '42501';
 END
 $$;
 CREATE TRIGGER approval_authorities_kept BEFORE DELETE ON memory.approval_authorities
@@ -230,7 +230,7 @@ $$;
 
 -- Connecting a client spends the sign-in for authority acts, and a sign-in
 -- already spent on one cannot connect. 0009's body is unchanged apart from the
--- two marked lines. One sign-in may still connect several clients.
+-- marked lines. One sign-in may still connect several clients.
 CREATE OR REPLACE FUNCTION memory.oauth_issue_code(
   p_user_id uuid, p_session_id uuid, p_client_id text, p_member_id uuid, p_redirect_uri text,
   p_code_challenge text, p_resource text, p_scopes text[], p_code_hash bytea
@@ -254,14 +254,17 @@ BEGIN
   IF v_member.id IS NULL OR p_scopes IS NULL OR NOT (p_scopes <@ v_member.scopes) THEN
     RETURN false;
   END IF;
-  -- (0015) not a sign-in already spent on an authority act; mark it as a connect.
-  IF EXISTS (SELECT 1 FROM memory.human_sign_ins_used u
-             WHERE u.session_hash = sha256(uuid_send(p_session_id)) AND u.purpose <> 'connect') THEN
-    RETURN false;
-  END IF;
+  -- (0015) Mark the sign-in as used to connect, then check how it was used.
+  -- The insert waits for any other use of this sign-in still in flight, and the
+  -- check reads what was committed, so a sign-in spent on an authority act,
+  -- even one committing at this moment, cannot connect.
   INSERT INTO memory.human_sign_ins_used (session_hash, actor_id, purpose)
   VALUES (sha256(uuid_send(p_session_id)), v_member.actor_id, 'connect')
   ON CONFLICT (session_hash) DO NOTHING;
+  IF (SELECT u.purpose FROM memory.human_sign_ins_used u
+      WHERE u.session_hash = sha256(uuid_send(p_session_id))) <> 'connect' THEN
+    RETURN false;
+  END IF;
   INSERT INTO memory.oauth_codes (code_hash, client_id, member_id, redirect_uri, code_challenge, resource, scopes, expires_at)
   VALUES (p_code_hash, v_client, v_member.id, p_redirect_uri, p_code_challenge, p_resource, p_scopes,
           now() + interval '5 minutes');

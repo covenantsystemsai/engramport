@@ -1124,6 +1124,60 @@ export class PostgresStore {
     });
   }
 
+  /**
+   * Open conflicts the key can read: active contradicts links whose two
+   * memories are both still active. A conflict closes by itself when either
+   * side is superseded or retracted. Optionally only those touching one memory.
+   */
+  async findConflicts(rawKey: string, input: { memoryId?: string; limit?: number; namespace?: string } = {}) {
+    if (input.memoryId !== undefined && (typeof input.memoryId !== "string" || !UUID.test(input.memoryId))) {
+      throw new StoreError("invalid", "memory_id is not a valid id");
+    }
+    const limit = input.limit ?? 20;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new StoreError("invalid", "limit must be 1 to 100");
+    return this.withKey(rawKey, async (c, ctx) => {
+      PostgresStore.checkNamespace(ctx, input.namespace);
+      type Side = { id: string; content: string; kind: string; claim_type: string; approval_state: string;
+                    verification_state: string; namespace: string; created_at: Date };
+      const r = await c.query<{ link_id: string; flagged_at: Date; flagged_by: string | null; flagged_in: string;
+                                a: Side; b: Side }>(
+        `SELECT l.id AS link_id, l.created_at AS flagged_at, act.slug AS flagged_by, ln.path AS flagged_in,
+                json_build_object('id', a.id, 'content', a.content, 'kind', a.kind, 'claim_type', a.claim_type,
+                  'approval_state', a.approval_state, 'verification_state', a.verification_state,
+                  'namespace', an.path, 'created_at', a.created_at) AS a,
+                json_build_object('id', b.id, 'content', b.content, 'kind', b.kind, 'claim_type', b.claim_type,
+                  'approval_state', b.approval_state, 'verification_state', b.verification_state,
+                  'namespace', bn.path, 'created_at', b.created_at) AS b
+         FROM memory.memory_links l
+         JOIN memory.namespaces ln ON ln.id = l.namespace_id
+         JOIN memory.memories a ON a.id = l.from_memory_id AND a.status = 'active'
+         JOIN memory.namespaces an ON an.id = a.namespace_id
+         JOIN memory.memories b ON b.id = l.to_memory_id AND b.status = 'active'
+         JOIN memory.namespaces bn ON bn.id = b.namespace_id
+         LEFT JOIN memory.provenance p ON p.id = l.provenance_id
+         LEFT JOIN memory.actors act ON act.id = p.actor_id
+         WHERE l.kind = 'contradicts' AND l.status = 'active'
+           AND ($1::uuid IS NULL OR l.from_memory_id = $1::uuid OR l.to_memory_id = $1::uuid)
+         ORDER BY l.created_at DESC, l.id
+         LIMIT $2`,
+        [input.memoryId ?? null, limit + 1],
+      );
+      const rows = r.rows.slice(0, limit);
+      return {
+        note: UNTRUSTED_NOTE,
+        conflicts: rows.map((row) => ({
+          link_id: row.link_id,
+          flagged_at: row.flagged_at.toISOString(),
+          // Who flagged it is provenance, shown only for the key's own namespace.
+          ...(row.flagged_by !== null ? { flagged_by: row.flagged_by } : {}),
+          flagged_in: row.flagged_in,
+          memories: [row.a, row.b],
+        })),
+        ...(r.rows.length > limit ? { more: true } : {}),
+      };
+    });
+  }
+
   /** Retract one relation, memory link or entity in the key's own namespace. */
   async unlink(rawKey: string, target: UnlinkTarget, namespace?: string) {
     return this.withKey(rawKey, async (c, ctx) => {

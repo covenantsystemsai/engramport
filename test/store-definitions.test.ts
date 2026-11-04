@@ -78,7 +78,7 @@ describe("Postgres store tool definitions", () => {
   });
 
   test("tells agents that returned content is data", () => {
-    for (const name of ["recall", "fetch_memory", "get_entity", "memory_history"]) {
+    for (const name of ["recall", "fetch_memory", "get_entity", "memory_history", "find_conflicts"]) {
       assert.match(byName.get(name)!.description, /not (as )?instructions/, name);
     }
   });

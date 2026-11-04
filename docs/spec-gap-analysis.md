@@ -6,6 +6,18 @@ It describes the code on `main` at commit `aeed605` (PR 27). Nothing has been de
 
 Namespaces are written as `<city>/<tower>/<cell>`. No client, product or project is named here.
 
+## Since this audit
+
+Merged after `aeed605`, and not reflected in the sections below:
+
+- **Graph rows on a retracted memory are hidden** (PR 29). A relation whose evidence memory is retracted, and an extracted entity no active memory mentions, no longer come back from `get_entity` or graph search. Retraction is still not deletion: the text, its embedding and the graph rows stay stored.
+- **Tool descriptions match the Postgres store** (PR 30).
+- **Request ids are recorded** (PRs 31 and 36). Every hosted response carries `X-Request-Id`, each write records it in its provenance, and the server logs one line per request. `session_id` is still unfilled, and there are still no metrics.
+- **Embeddings stay in Supabase by default** (PRs 32 and 34). Each namespace names one embedding model. New namespaces use Supabase's built-in `gte-small`, run in the same project; text goes to OpenAI only for a namespace set to OpenAI's model. The extraction provider is still undecided.
+- **Retrieval measured with a real model** (PRs 33, 35 and 37). On GitHub's runners with `gte-small`, hybrid recall ranks the expected memory first on 95% of the held-out questions and 96% of a second set written after the tuning, with every answer in the top 3.
+
+Items 1, 2, 3, 5 and 7 of the summary stand as written, and `ENGRAMPORT_STORE` still defaults to `eidetic`.
+
 ## Summary
 
 The foundation the spec asks to preserve is real and well tested: database-enforced isolation, city / tower / cell namespaces, server-attested provenance, a typed knowledge graph, hybrid retrieval in one SQL function, content-blind administration, and an OAuth 2.1 server with immediate revocation. Those parts pass 57 unit tests, 72 database-backed store tests and 325 SQL assertions on a local Postgres 16.

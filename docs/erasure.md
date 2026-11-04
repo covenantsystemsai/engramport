@@ -41,8 +41,8 @@ Founder decision D-02, decided Nov 4:
 | An agent asks: `request_erasure` | Built |
 | Admin ledger: `engramport admin erasure list` | Built |
 | The owner's page to review and confirm: `/erase/<request id>` | Built, off unless `ENGRAMPORT_ERASURE_PAGE=true` |
+| Export by an owner: `/export` | Built, off unless `ENGRAMPORT_EXPORT_PAGE=true`; see Export below |
 | Delegated erasure; export grants | To build |
-| Export | To build |
 | Whole-cell erasure with a second confirmer | To build |
 | 30-day retraction recovery window | To build |
 
@@ -144,3 +144,48 @@ Supabase keeps daily backups for 7 days on the Pro plan, and single rows can't b
 removed from them. So erased text can remain in a backup for up to 7 days after
 the erasure. Say that plainly; don't claim more until the backup lifecycle can
 show it.
+
+## Export
+
+A person with an owner's grant over a namespace downloads everything in it from
+`<public URL>/export`, with a fresh Google sign-in (D-02.4). The database side is
+`db/migrations/0023_export.sql`; its tests are `db/test/export_test.sql`.
+
+What the file holds, for that one namespace and nothing above or below it, as
+JSON lines (one object per line, `type` says which):
+
+- a header: the namespace, who exported it, when, and counts;
+- every memory and every version, with its text, status, claim type, approval
+  and verification state, and who wrote it through which tool and client;
+  erased memories come as tombstones with no text;
+- entities, aliases, relations, entity mentions and memory links;
+- the approval trail: requests and decisions, with who made them;
+- the erasure records.
+
+Embeddings are left out: they are derived from the text and rebuilt from it.
+
+How it runs, and why nothing is kept:
+
+1. The person signs in and is offered only the namespaces they hold a direct,
+   unrestricted owner's grant over. A grant limited to some claim types, or a
+   delegation, exports nothing until delegated export grants are built.
+2. They pick one and see what the file will hold; a single-use secret is kept
+   only in the page's own encrypted cookie.
+3. On confirming, `memory.start_export` spends the sign-in and the secret,
+   re-checks the grant under lock, and records the start. That record is
+   committed on its own, so an attempt stays on record even if the download
+   then fails.
+4. `memory.export_rows` streams the rows from the database straight to the
+   browser in small batches, in one transaction that records the export as
+   delivered, with counts. If the browser goes away first, the transaction rolls
+   back: the export shows as started but not delivered, and the file the
+   browser got is cut off rather than passed off as whole. To try again, the
+   person signs in again for a new export.
+
+EngramPort writes no file and keeps no copy. Postgres may use its own temporary
+work space while the query runs, released when it ends. The admin sees who
+exported which namespace, when, and how much (`engramport admin export list`),
+never what was in it, and can't export.
+
+The page is off unless `ENGRAMPORT_EXPORT_PAGE=true`, which needs OAuth set up
+and `<public URL>/export/callback` in Supabase's redirect URLs.

@@ -38,6 +38,8 @@ export interface HttpAppOptions {
   approve?: Router;
   /** The erasure page (createErasureRouter), served without a key. */
   erase?: Router;
+  /** The export page (createExportRouter), served without a key. */
+  exportPage?: Router;
   /** RFC 9728 metadata URL named in every 401, so clients can start sign-in. */
   resourceMetadataUrl?: string;
   /** Checks a key before any route runs: false means unknown, revoked or expired. */
@@ -91,6 +93,7 @@ export function createHttpApp(opts: HttpAppOptions): express.Express {
   if (opts.oauth) app.use(opts.oauth);
   if (opts.approve) app.use(opts.approve);
   if (opts.erase) app.use(opts.erase);
+  if (opts.exportPage) app.use(opts.exportPage);
 
   const challenge = (error?: string) =>
     [

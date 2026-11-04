@@ -173,6 +173,18 @@ export interface ErasureRow {
   failed_attempts: number;
 }
 
+export interface ExportRow {
+  id: string;
+  namespace: string;
+  actor: string;
+  authority_id: string;
+  issued_at: Date;
+  started_at: Date | null;
+  completed_at: Date | null;
+  /** Counts of what was delivered. Never content. */
+  counts: Record<string, number> | null;
+}
+
 export interface MintedKey {
   key: string;
   prefix: string;
@@ -870,6 +882,32 @@ export class AdminClient {
     );
   }
 
+  /**
+   * Exports, newest first: who exported which namespace under which authority,
+   * when it was confirmed and delivered, and how much. Never content; the admin
+   * can't export.
+   */
+  async listExports(opts: { namespace?: string; sinceMs?: number; limit?: number } = {}): Promise<ExportRow[]> {
+    if (opts.namespace) checkPath(opts.namespace);
+    const limit = opts.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new AdminError("--limit is 1 to 1000");
+    const since = opts.sinceMs === undefined ? null : new Date(Date.now() - opts.sinceMs);
+    return this.tx(async (c) =>
+      (await c.query<ExportRow>(
+        `SELECT x.id, n.path AS namespace, a.slug AS actor, x.authority_id, x.issued_at, x.started_at,
+                x.completed_at, x.counts
+         FROM memory.exports x
+         JOIN memory.namespaces n ON n.id = x.namespace_id
+         JOIN memory.actors a ON a.id = x.actor_id
+         WHERE ($1::text IS NULL OR n.path = $1 OR starts_with(n.path, $1 || '/'))
+           AND ($2::timestamptz IS NULL OR x.issued_at >= $2)
+         ORDER BY x.issued_at DESC, x.id
+         LIMIT $3`,
+        [opts.namespace ?? null, since, limit],
+      )).rows,
+    );
+  }
+
   /** Connections people approved: which client, as which member, and whether it still works. */
   async listConnections(opts: { namespace?: string; email?: string; includeRevoked?: boolean } = {}): Promise<ConnectionRow[]> {
     if (opts.namespace) checkPath(opts.namespace);
@@ -1038,6 +1076,11 @@ export const ADMIN_USAGE = `Usage: engramport admin <command>
                                      much was removed. Never the text. The admin
                                      can't erase anything; a person with authority
                                      over the namespace decides with their sign-in.
+  export list [--namespace <path>] [--since 7d] [--limit 100]
+                                     who exported which namespace, under which
+                                     authority, and whether it was delivered,
+                                     with counts. Never content; the admin can't
+                                     export.
   connection list [--namespace <path>] [--email <email>] [--all]
   connection revoke <id>             ends one connection and its tokens; the
                                      membership stays, so they can connect again
@@ -1393,6 +1436,24 @@ export async function runAdmin(argv: string[], open: () => AdminClient, io: Admi
             + `  ${done}${e.failed_attempts ? `  (${e.failed_attempts} failed attempts)` : ""}`);
         }
         if (!rows.length) io.err("No erasure requests.");
+        return 0;
+      }
+      case "export list": {
+        const { positional, flags } = parseFlags(rest, { namespace: "value", since: "value", limit: "value" });
+        if (positional.length) throw new UsageError(`unexpected argument ${positional[0]}`);
+        const rows = await db().listExports({
+          namespace: typeof flags.namespace === "string" ? flags.namespace : undefined,
+          sinceMs: typeof flags.since === "string" ? parseDuration(flags.since) : undefined,
+          limit: typeof flags.limit === "string" ? Number(flags.limit) : undefined,
+        });
+        for (const e of rows) {
+          const state = e.completed_at ? `delivered ${when(e.completed_at)}: `
+              + Object.entries(e.counts ?? {}).map(([k, v]) => `${v} ${k.replace(/_/g, " ")}`).join(", ")
+            : e.started_at ? `started ${when(e.started_at)}, not delivered`
+            : "confirmation page shown, not started";
+          io.out(`${when(e.issued_at)}  ${e.id}  ${e.namespace}  by ${e.actor} under ${e.authority_id}  ${state}`);
+        }
+        if (!rows.length) io.err("No exports.");
         return 0;
       }
       case "authority revoke": {

@@ -95,30 +95,34 @@ interface Review {
   replaces_current: boolean | null;
 }
 
-const b64url = (buf: Buffer) => buf.toString("base64url");
-const s256 = (verifier: string) => b64url(createHash("sha256").update(verifier, "ascii").digest());
-const one = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+export const b64url = (buf: Buffer) => buf.toString("base64url");
+export const s256 = (verifier: string) => b64url(createHash("sha256").update(verifier, "ascii").digest());
+export const one = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 
-function visitKey(pepper: Buffer): Buffer {
-  return Buffer.from(hkdfSync("sha256", pepper, Buffer.alloc(0), "engramport approval visit v1", 32));
+const VISIT_INFO = "engramport approval visit v1";
+
+/** Each page seals its visits under a key of its own, so one page's cookie means nothing to another. */
+function visitKey(pepper: Buffer, info: string): Buffer {
+  return Buffer.from(hkdfSync("sha256", pepper, Buffer.alloc(0), info, 32));
 }
 
 /** AES-256-GCM under a key of its own, derived from the pepper. */
-export function sealVisit(pepper: Buffer, value: Visit): string {
+export function sealVisit<V = Visit>(pepper: Buffer, value: V, info = VISIT_INFO): string {
   const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", visitKey(pepper), iv);
+  const cipher = createCipheriv("aes-256-gcm", visitKey(pepper, info), iv);
   const body = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
   return b64url(Buffer.concat([iv, cipher.getAuthTag(), body]));
 }
 
-export function openVisit(pepper: Buffer, sealed: string | undefined, now = Date.now()): Visit | undefined {
+export function openVisit<V extends { exp: number } = Visit>(pepper: Buffer, sealed: string | undefined, now = Date.now(),
+                                                         info = VISIT_INFO): V | undefined {
   if (!sealed || sealed.length > 8192) return undefined;
   try {
     const raw = Buffer.from(sealed, "base64url");
     if (raw.length < 29) return undefined;
-    const decipher = createDecipheriv("aes-256-gcm", visitKey(pepper), raw.subarray(0, 12));
+    const decipher = createDecipheriv("aes-256-gcm", visitKey(pepper, info), raw.subarray(0, 12));
     decipher.setAuthTag(raw.subarray(12, 28));
-    const value = JSON.parse(Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString("utf8")) as Visit;
+    const value = JSON.parse(Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString("utf8")) as V;
     if (typeof value.exp !== "number" || value.exp <= now) return undefined;
     return value;
   } catch {
@@ -126,10 +130,10 @@ export function openVisit(pepper: Buffer, sealed: string | undefined, now = Date
   }
 }
 
-function readCookie(req: Request): string | undefined {
+export function readCookie(req: Request, name = COOKIE): string | undefined {
   for (const part of (req.headers.cookie ?? "").split(";")) {
     const i = part.indexOf("=");
-    if (i > 0 && part.slice(0, i).trim() === COOKIE) return part.slice(i + 1).trim();
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
   }
   return undefined;
 }
@@ -139,10 +143,10 @@ const setCookie = (res: Response, value: string) =>
 const clearCookie = (res: Response) =>
   res.append("Set-Cookie", `${COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`);
 
-const escape = (s: string) =>
+export const escape = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-function page(res: Response, status: number, title: string, body: string): void {
+export function page(res: Response, status: number, title: string, body: string): void {
   // No scripts, no framing, nothing from elsewhere; forms post only here.
   res
     .status(status)
@@ -205,7 +209,7 @@ function notDecidable(r: Review): string | undefined {
 }
 
 /** The database's own answer, which is written for the person, or a generic one. */
-function refusal(err: unknown): string | undefined {
+export function refusal(err: unknown): string | undefined {
   const e = err as { code?: string; message?: string };
   if (e && typeof e.message === "string" && (e.code === "42501" || e.code === "55000" || e.code === "22023")) {
     return e.message.charAt(0).toUpperCase() + e.message.slice(1) + ".";
@@ -214,9 +218,9 @@ function refusal(err: unknown): string | undefined {
 }
 
 type Handler = (req: Request, res: Response) => Promise<unknown>;
-const safe = (fn: Handler) => (req: Request, res: Response) => {
+export const safe = (fn: Handler, what = "approval page") => (req: Request, res: Response) => {
   fn(req, res).catch((err) => {
-    console.error("[engramport] approval page error:", (err as Error).message);
+    console.error(`[engramport] ${what} error:`, (err as Error).message);
     if (!res.headersSent) page(res, 503, "Try again shortly", "<p>Something went wrong on our side. Nothing was decided.</p>");
   });
 };

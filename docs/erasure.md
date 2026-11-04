@@ -40,14 +40,27 @@ Founder decision D-02, decided Nov 4:
 | Erasure core: request, review, confirm, erase, verify, record | Built (this page) |
 | An agent asks: `request_erasure` | Built |
 | Admin ledger: `engramport admin erasure list` | Built |
-| The owner's page to review and confirm | Next |
+| The owner's page to review and confirm: `/erase/<request id>` | Built, off unless `ENGRAMPORT_ERASURE_PAGE=true` |
 | Delegated erasure; export grants | To build |
 | Export | To build |
 | Whole-cell erasure with a second confirmer | To build |
 | 30-day retraction recovery window | To build |
 
-Until the page exists, an erasure can be decided only through the database
-functions below, by a person's own sign-in.
+## The page
+
+The owner opens `<public URL>/erase/<request id>`: the request id comes back to
+the agent from `request_erasure` and shows in `engramport admin erasure list`.
+The page asks for a fresh Google sign-in, shows every memory the request names
+with its text and how much would go with it, then asks for a second, explicit
+confirmation. Each visit uses its own sign-in once. The page carries no scripts,
+can't be framed, and keeps its secret only in an encrypted cookie of its own,
+which the approval page's cookie can't stand in for. A failed confirmation
+erases nothing and records only its error class.
+
+The page is off unless `ENGRAMPORT_ERASURE_PAGE=true`, which needs OAuth set up
+and `<public URL>/erase/callback` in Supabase's redirect URLs (see
+`docs/oauth-setup.md`). It is separate from the approval page's setting, so
+turning on approvals doesn't turn on erasure.
 
 ## What an erasure removes
 

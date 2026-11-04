@@ -280,7 +280,7 @@ until then these are database functions only.
 
 Founder decisions D-02.1 and D-02.1a. The database side is
 `db/migrations/0026_cell_erasure.sql`; its tests are
-`db/test/cell_erasure_test.sql`.
+`db/test/cell_erasure_test.sql` and `db/test/cell_erasure_race_test.sh`.
 
 - **The confirmer role.** The admin assigns the cell-erasure-confirmer role to
   one named person who belongs to AN2B (an enabled person with a sign-in
@@ -299,7 +299,10 @@ Founder decisions D-02.1 and D-02.1a. The database side is
   cancel it (`engramport admin cell-erasure cancel`).
 - **The cell is frozen** while a request is open: nothing new is written to it
   (memories, revisions, embeddings, graph rows), so what is confirmed is what
-  was previewed.
+  was previewed. Every write into a cell shares a lock on the cell's row that
+  conflicts with starting and confirming, so a write under way when the owner
+  starts finishes first and is counted and erased with the rest, and one that
+  comes later is refused.
 - **Confirming.** A different person whose confirmer role covers the cell sees
   the open requests (`memory.pending_cell_erasures`), reviews fresh counts and a
   digest of the ids of everything that will go, never content
@@ -312,7 +315,7 @@ Founder decisions D-02.1 and D-02.1a. The database side is
   still, checks each again by the wall clock, and refuses if the cell changed.
   Then it erases every memory version (each with a content-free tombstone naming
   the request), every embedding and every graph row in the cell, asserted ones
-  included, scrubs the cell's provenance of anything content-derived, verifies
+  included and whatever their timestamps say, scrubs the cell's provenance of anything content-derived, verifies
   nothing is left, and records the counts. All of it, or none of it. The cell
   stays, and takes new writes again as new submissions.
 - **The record.** The request names who started it, under which authority, who

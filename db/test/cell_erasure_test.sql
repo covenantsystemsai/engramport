@@ -133,6 +133,9 @@ INSERT INTO memory.relations (namespace_id, source_entity_id, predicate, target_
   VALUES (:'c2', :'e1', 'keeps', :'e2', :'m1_prov');
 INSERT INTO memory.memory_links (namespace_id, from_memory_id, kind, to_memory_id, provenance_id)
   VALUES (:'c2', :'m1', 'related', :'m2', :'m1_prov');
+-- A row dated in the future is still in the cell, and goes with it.
+INSERT INTO memory.entities (namespace_id, type, name, provenance_id, origin, created_at)
+  VALUES (:'c2', 'person', 'Future Dated', :'m1_prov', 'asserted', now() + interval '1 year') RETURNING id AS e_future \gset
 
 \echo '-- only the cell''s owner starts it'
 SELECT * FROM t.sign_in('er-c2@client.test') \gset o1_
@@ -143,7 +146,7 @@ SET ROLE engramport_app;
 SELECT t.expect_count('the owner sees counts, and no text',
   format($$SELECT 1 FROM memory.cell_erasure_preview(%L, %L, %L)
            WHERE (counts ->> 'memories')::int = (%L::jsonb ->> 'memories')::int + 2
-             AND (counts ->> 'entities')::int = (%L::jsonb ->> 'entities')::int + 2
+             AND (counts ->> 'entities')::int = (%L::jsonb ->> 'entities')::int + 3
              AND open_request_id IS NULL AND counts::text NOT LIKE '%%drawer%%'$$,
          :'o1_user_id', :'o1_session_id', :'c2', :'base', :'base'), 1);
 SELECT t.expect_error('another cell''s owner can''t',
@@ -239,7 +242,7 @@ RESET ROLE;
 SELECT t.expect_count('verified, with counts',
   format($$SELECT 1 WHERE (%L::jsonb ->> 'verified')::boolean
            AND (%L::jsonb ->> 'versions')::int = (%L::jsonb ->> 'memories')::int + 2
-           AND (%L::jsonb ->> 'entities')::int = (%L::jsonb ->> 'entities')::int + 2
+           AND (%L::jsonb ->> 'entities')::int = (%L::jsonb ->> 'entities')::int + 3
            AND (%L::jsonb ->> 'aliases')::int = (%L::jsonb ->> 'aliases')::int + 1$$,
          :'ev', :'ev', :'base', :'ev', :'base', :'ev', :'base'), 1);
 SELECT t.expect_count('every memory version is erased, with a tombstone naming the request',
@@ -251,6 +254,8 @@ SELECT t.expect_count('no embedding, entity, alias, relation, mention or link is
            UNION ALL SELECT namespace_id FROM memory.entity_aliases UNION ALL SELECT namespace_id FROM memory.relations
            UNION ALL SELECT namespace_id FROM memory.entity_mentions UNION ALL SELECT namespace_id FROM memory.memory_links) x
            WHERE x.namespace_id = %L$$, :'c2'), 0);
+SELECT t.expect_count('the future-dated row went too',
+  format($$SELECT 1 FROM memory.entities WHERE id = %L$$, :'e_future'), 0);
 SELECT t.expect_count('nor anything content-derived in its provenance',
   format($$SELECT 1 FROM memory.provenance WHERE namespace_id = %L
            AND (source_ref IS NOT NULL OR claimed <> '{}' OR content_sha256 IS NOT NULL)$$, :'c2'), 0);

@@ -341,9 +341,15 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
 $$;
 REVOKE ALL ON FUNCTION memory.cell_open_erasure(uuid) FROM PUBLIC;
 
+-- Every write into a cell shares a lock on the cell's row with the other
+-- writes, and conflicts with the one request_cell_erasure and the decision
+-- take. So a write already under way finishes before a request is made, and
+-- is counted, previewed and erased with the rest; a write that comes after
+-- waits, then sees the open request and is refused.
 CREATE FUNCTION memory.cell_frozen_guard() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 BEGIN
+  PERFORM 1 FROM memory.namespaces n WHERE n.id = NEW.namespace_id FOR SHARE;
   IF memory.cell_open_erasure(NEW.namespace_id) IS NOT NULL THEN
     RAISE EXCEPTION 'this cell is waiting for whole-cell erasure; nothing new is written to it until that is decided'
       USING ERRCODE = '55000';
@@ -425,11 +431,12 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
 $$;
 REVOKE ALL ON FUNCTION memory.cell_erasure_objects_sha256(uuid) FROM PUBLIC;
 
--- Erase everything in a cell created at or before p_before: every memory
--- version (with a tombstone of the given source), its embeddings and every
--- graph row, and scrub the cell's provenance of anything content-derived.
--- Returns the counts. Called only inside the decision and the backup
--- reconcile below.
+-- Erase everything in a cell: every memory version (with a tombstone of the
+-- given source), its embeddings and every graph row, and scrub the cell's
+-- provenance of anything content-derived. Returns the counts. The decision
+-- passes no cutoff and erases everything, whatever its timestamps say; only
+-- the backup reconcile below passes one (p_before), to keep what was written
+-- after the erasure. Called only by those two.
 CREATE FUNCTION memory.erase_cell_contents(p_namespace_id uuid, p_before timestamptz, p_source text) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog AS $$
 DECLARE
@@ -442,7 +449,7 @@ DECLARE
   n bigint;
 BEGIN
   FOR v IN SELECT m.id FROM memory.memories m
-           WHERE m.namespace_id = p_namespace_id AND m.status <> 'erased' AND m.created_at <= p_before
+           WHERE m.namespace_id = p_namespace_id AND m.status <> 'erased' AND (p_before IS NULL OR m.created_at <= p_before)
            ORDER BY m.id LOOP
     CONTINUE WHEN (SELECT m.status FROM memory.memories m WHERE m.id = v) = 'erased';
     v_part := memory.erase_chain(v, NULL, p_source);
@@ -452,23 +459,23 @@ BEGIN
     END LOOP;
   END LOOP;
 
-  DELETE FROM memory.entity_mentions WHERE namespace_id = p_namespace_id AND created_at <= p_before;
+  DELETE FROM memory.entity_mentions WHERE namespace_id = p_namespace_id AND (p_before IS NULL OR created_at <= p_before);
   GET DIAGNOSTICS n = ROW_COUNT;
   v_counts := jsonb_set(v_counts, '{mentions}', to_jsonb((v_counts ->> 'mentions')::bigint + n));
-  DELETE FROM memory.relations WHERE namespace_id = p_namespace_id AND created_at <= p_before;
+  DELETE FROM memory.relations WHERE namespace_id = p_namespace_id AND (p_before IS NULL OR created_at <= p_before);
   GET DIAGNOSTICS n = ROW_COUNT;
   v_counts := jsonb_set(v_counts, '{relations}', to_jsonb((v_counts ->> 'relations')::bigint + n));
-  DELETE FROM memory.memory_links WHERE namespace_id = p_namespace_id AND created_at <= p_before;
+  DELETE FROM memory.memory_links WHERE namespace_id = p_namespace_id AND (p_before IS NULL OR created_at <= p_before);
   GET DIAGNOSTICS n = ROW_COUNT;
   v_counts := jsonb_set(v_counts, '{links}', to_jsonb((v_counts ->> 'links')::bigint + n));
-  DELETE FROM memory.entity_aliases WHERE namespace_id = p_namespace_id AND created_at <= p_before;
+  DELETE FROM memory.entity_aliases WHERE namespace_id = p_namespace_id AND (p_before IS NULL OR created_at <= p_before);
   GET DIAGNOSTICS n = ROW_COUNT;
   v_counts := jsonb_set(v_counts, '{aliases}', to_jsonb(n));
-  DELETE FROM memory.entities WHERE namespace_id = p_namespace_id AND created_at <= p_before;
+  DELETE FROM memory.entities WHERE namespace_id = p_namespace_id AND (p_before IS NULL OR created_at <= p_before);
   GET DIAGNOSTICS n = ROW_COUNT;
   v_counts := jsonb_set(v_counts, '{entities}', to_jsonb((v_counts ->> 'entities')::bigint + n));
   UPDATE memory.provenance SET source_ref = NULL, claimed = '{}', content_sha256 = NULL
-  WHERE namespace_id = p_namespace_id AND created_at <= p_before
+  WHERE namespace_id = p_namespace_id AND (p_before IS NULL OR created_at <= p_before)
     AND (source_ref IS NOT NULL OR claimed <> '{}' OR content_sha256 IS NOT NULL);
   GET DIAGNOSTICS n = ROW_COUNT;
   v_counts := jsonb_set(v_counts, '{provenance_scrubbed}', to_jsonb(n));
@@ -477,18 +484,19 @@ END
 $$;
 REVOKE ALL ON FUNCTION memory.erase_cell_contents(uuid, timestamptz, text) FROM PUBLIC;
 
--- Nothing that was in the cell is left anywhere retrievable.
+-- Nothing that was in the cell is left anywhere retrievable (with no cutoff,
+-- nothing at all is left in it).
 CREATE FUNCTION memory.cell_erasure_verified(p_namespace_id uuid, p_before timestamptz) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
   SELECT memory.erasure_verified(coalesce((SELECT array_agg(m.id) FROM memory.memories m
-                                           WHERE m.namespace_id = p_namespace_id AND m.created_at <= p_before), '{}'))
-     AND NOT EXISTS (SELECT 1 FROM memory.memory_embeddings x WHERE x.namespace_id = p_namespace_id AND x.created_at <= p_before)
-     AND NOT EXISTS (SELECT 1 FROM memory.entities x WHERE x.namespace_id = p_namespace_id AND x.created_at <= p_before)
-     AND NOT EXISTS (SELECT 1 FROM memory.entity_aliases x WHERE x.namespace_id = p_namespace_id AND x.created_at <= p_before)
-     AND NOT EXISTS (SELECT 1 FROM memory.relations x WHERE x.namespace_id = p_namespace_id AND x.created_at <= p_before)
-     AND NOT EXISTS (SELECT 1 FROM memory.entity_mentions x WHERE x.namespace_id = p_namespace_id AND x.created_at <= p_before)
-     AND NOT EXISTS (SELECT 1 FROM memory.memory_links x WHERE x.namespace_id = p_namespace_id AND x.created_at <= p_before)
-     AND NOT EXISTS (SELECT 1 FROM memory.provenance p WHERE p.namespace_id = p_namespace_id AND p.created_at <= p_before
+                                           WHERE m.namespace_id = p_namespace_id AND (p_before IS NULL OR m.created_at <= p_before)), '{}'))
+     AND NOT EXISTS (SELECT 1 FROM memory.memory_embeddings x WHERE x.namespace_id = p_namespace_id AND (p_before IS NULL OR x.created_at <= p_before))
+     AND NOT EXISTS (SELECT 1 FROM memory.entities x WHERE x.namespace_id = p_namespace_id AND (p_before IS NULL OR x.created_at <= p_before))
+     AND NOT EXISTS (SELECT 1 FROM memory.entity_aliases x WHERE x.namespace_id = p_namespace_id AND (p_before IS NULL OR x.created_at <= p_before))
+     AND NOT EXISTS (SELECT 1 FROM memory.relations x WHERE x.namespace_id = p_namespace_id AND (p_before IS NULL OR x.created_at <= p_before))
+     AND NOT EXISTS (SELECT 1 FROM memory.entity_mentions x WHERE x.namespace_id = p_namespace_id AND (p_before IS NULL OR x.created_at <= p_before))
+     AND NOT EXISTS (SELECT 1 FROM memory.memory_links x WHERE x.namespace_id = p_namespace_id AND (p_before IS NULL OR x.created_at <= p_before))
+     AND NOT EXISTS (SELECT 1 FROM memory.provenance p WHERE p.namespace_id = p_namespace_id AND (p_before IS NULL OR p.created_at <= p_before)
                        AND (p.source_ref IS NOT NULL OR p.claimed <> '{}' OR p.content_sha256 IS NOT NULL))
 $$;
 REVOKE ALL ON FUNCTION memory.cell_erasure_verified(uuid, timestamptz) FROM PUBLIC;
@@ -526,8 +534,7 @@ BEGIN
   END IF;
   v_actor := memory.consume_human_sign_in(p_user_id, p_session_id, 'cell_erase');
   -- One open request per cell: requests and decisions for a cell queue on its
-  -- row. NO KEY UPDATE leaves writes' foreign-key checks alone; the freeze
-  -- refuses those.
+  -- row, and wait for writes under way in it (see memory.cell_frozen_guard).
   PERFORM 1 FROM memory.namespaces n WHERE n.id = p_namespace_id AND n.level = 'cell' FOR NO KEY UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'cell not found, or you are not its owner' USING ERRCODE = '42501';
@@ -664,7 +671,8 @@ BEGIN
      OR c.secret_sha256 <> sha256(decode(p_secret, 'hex')) THEN
     RAISE EXCEPTION 'no such challenge for this sign-in' USING ERRCODE = '42501';
   END IF;
-  -- The cell first, then the request, as request_cell_erasure takes them.
+  -- The cell first, then the request, as request_cell_erasure takes them. This
+  -- waits for any write under way in the cell.
   PERFORM 1 FROM memory.namespaces n
   WHERE n.id = (SELECT x.namespace_id FROM memory.cell_erasure_requests x WHERE x.id = c.request_id) FOR NO KEY UPDATE;
   SELECT * INTO r FROM memory.cell_erasure_requests x WHERE x.id = c.request_id FOR UPDATE;
@@ -700,9 +708,9 @@ BEGIN
 
   v_at := clock_timestamp();
   PERFORM set_config('engramport.cell_erasure', r.id::text, true);
-  v_counts := memory.erase_cell_contents(r.namespace_id, v_at, 'cell');
+  v_counts := memory.erase_cell_contents(r.namespace_id, NULL, 'cell');
   PERFORM set_config('engramport.cell_erasure', '', true);
-  IF NOT memory.cell_erasure_verified(r.namespace_id, v_at) THEN
+  IF NOT memory.cell_erasure_verified(r.namespace_id, NULL) THEN
     RAISE EXCEPTION 'erasure could not be verified; nothing was changed' USING ERRCODE = 'XX000';
   END IF;
   -- The wall clock once more, now that everything is erased and held.

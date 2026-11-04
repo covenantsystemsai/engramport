@@ -234,7 +234,7 @@ until then these are database functions only, like approval delegation.
 
 Founder decision D-02.3. The database side is
 `db/migrations/0025_retraction_restore.sql`; its tests are
-`db/test/restore_test.sql`.
+`db/test/restore_test.sql` and `db/test/restore_race_test.sh`.
 
 - **Retracting** (an agent's `delete_memory`, withdrawing a revision) takes a
   memory out of recall and authority at once and keeps its text. The database
@@ -247,9 +247,12 @@ Founder decision D-02.3. The database side is
   memory, that exact retraction and the authority
   (`memory.issue_restore_challenge`), and the decision, which spends the
   sign-in and the challenge together (`memory.decide_restore_challenge`). No
-  agent, key or admin can restore.
+  agent, key or admin can restore: the database lets a retracted memory change
+  back only when the decision has written its restoration record in the same
+  transaction, and no other role can write one.
 - **The window.** 30 days from the retraction by the wall clock, checked when
-  the challenge is issued and again when the decision is written. After that,
+  the challenge is issued and again when the decision is written, after it
+  holds the memory and the authority. After that,
   and for memories retracted before this existed, the retraction is final.
 - **What comes back.** The memory returns to what it was, with its approval
   state unchanged: a current memory comes back current unless another current

@@ -64,6 +64,9 @@ BEGIN; SELECT t.as_key(:'k_c1', :'c1');
     format($$UPDATE memory.memories SET retracted_at = now() + interval '1 year' WHERE id = %L$$, :'m1'));
   SELECT t.expect_error('nor bring the memory back itself',
     format($$UPDATE memory.memories SET status = 'active' WHERE id = %L$$, :'m1'), '%retracted version stays that way%');
+  SELECT set_config('engramport.restore_step', :'m1', true);
+  SELECT t.expect_error('not even by setting the old restore marker',
+    format($$UPDATE memory.memories SET status = 'active' WHERE id = %L$$, :'m1'), '%retracted version stays that way%');
 ROLLBACK;
 RESET ROLE;
 UPDATE memory.memories SET retracted_at = now() + interval '1 year', retracted_from = 'proposed' WHERE id = :'m1';

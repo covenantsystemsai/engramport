@@ -135,8 +135,12 @@ BEGIN
   IF NEW.status IS DISTINCT FROM OLD.status THEN
     -- Restored (D-02.3): back to what it was retracted from, only inside
     -- memory.decide_restore_challenge, which checks the person and the window.
+    -- The proof is the restoration record that decision writes first, in this
+    -- same transaction: no role but the decision can write one.
     IF OLD.status = 'retracted' AND NEW.status = OLD.retracted_from AND NEW.status IN ('active', 'proposed')
-       AND current_setting('engramport.restore_step', true) = OLD.id::text THEN
+       AND EXISTS (SELECT 1 FROM memory.restorations x
+                   WHERE x.memory_id = OLD.id AND x.txid = txid_current() AND x.retracted_at = OLD.retracted_at
+                     AND x.restored_to = NEW.status) THEN
       RETURN NEW;
     END IF;
     IF NEW.status = 'proposed' THEN
@@ -203,6 +207,8 @@ CREATE TABLE memory.restorations (
   retracted_at timestamptz NOT NULL,
   restored_to memory.memory_status NOT NULL CHECK (restored_to IN ('active', 'proposed')),
   restored_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  -- How the lifecycle guard knows a restoration is under way in this transaction.
+  txid bigint NOT NULL DEFAULT txid_current(),
   CHECK (restored_at < retracted_at + interval '30 days')
 );
 CREATE INDEX restorations_memory ON memory.restorations (memory_id);
@@ -337,8 +343,8 @@ END
 $$;
 
 -- Step 3: spend the sign-in and the challenge together, hold the memory and
--- the authority still, check everything again by the wall clock, bring the
--- memory back and record it. All of it, or none of it.
+-- the authority still, check everything again by the wall clock, record the
+-- restoration and bring the memory back. All of it, or none of it.
 CREATE FUNCTION memory.decide_restore_challenge(p_user_id uuid, p_session_id uuid, p_challenge_id uuid,
                                                 p_secret text) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog AS $$
@@ -385,13 +391,20 @@ BEGIN
     RAISE EXCEPTION '%', v_refusal USING ERRCODE = '55000';
   END IF;
 
-  PERFORM set_config('engramport.restore_step', m.id::text, true);
-  UPDATE memory.memories SET status = m.retracted_from WHERE id = m.id;
-  PERFORM set_config('engramport.restore_step', '', true);
+  -- The wall clock once more, now that everything is held.
+  IF c.expires_at <= clock_timestamp() THEN
+    RAISE EXCEPTION 'this challenge has expired; review the memory again' USING ERRCODE = '55000';
+  END IF;
+  IF v_expires <= clock_timestamp() THEN
+    RAISE EXCEPTION 'the authority this challenge was issued under is no longer valid' USING ERRCODE = '55000';
+  END IF;
+
+  -- The record first: it is what lets the lifecycle guard accept the change.
   INSERT INTO memory.restorations (memory_id, namespace_id, restored_by_actor_id, authority_id, challenge_id,
       retracted_at, restored_to)
   VALUES (m.id, m.namespace_id, v_actor, c.authority_id, c.id, m.retracted_at, m.retracted_from)
   RETURNING id INTO v_id;
+  UPDATE memory.memories SET status = m.retracted_from WHERE id = m.id;
   RETURN jsonb_build_object('restoration', v_id, 'memory', m.id, 'restored_to', m.retracted_from,
                             'retracted_at', m.retracted_at);
 END
@@ -405,7 +418,9 @@ ALTER TABLE memory.restorations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE memory.restorations FORCE ROW LEVEL SECURITY;
 -- The admin audits restorations without content: who restored which memory,
 -- when, under which authority. Never a secret or a sign-in.
-GRANT SELECT ON memory.restorations TO engramport_admin;
+GRANT SELECT (id, memory_id, namespace_id, restored_by_actor_id, authority_id, challenge_id, retracted_at, restored_to,
+              restored_at)
+  ON memory.restorations TO engramport_admin;
 CREATE POLICY restorations_admin_read ON memory.restorations FOR SELECT TO engramport_admin USING (true);
 GRANT SELECT (id, memory_id, namespace_id, actor_id, authority_id, retracted_at, issued_at, expires_at)
   ON memory.restore_challenges TO engramport_admin;

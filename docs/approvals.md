@@ -162,8 +162,11 @@ unit tests 76 passed, store and database tests 88 passed, typecheck clean. The
 commit, check runs and second review of the fixed head are recorded on PR 41.
 
 **PR 42 (0016).** Codex reviewed head `8ef38ec` and raised no findings. PR 42
-is held until PR 41 merges; it then takes PR 41's fixes, is verified again, and
-is reviewed again on its new head before it is retargeted to main.
+now carries PR 41's fixes, and in line with L5 its approval records also refuse
+truncation by any role. Local verification on that revision: database suite
+484 checks passed, unit tests 77 passed, store and database tests 90 passed,
+typecheck clean. It needs a fresh review on its new head, and is held until
+PR 41 merges before it is retargeted to main.
 
 **Merge decisions.** PR 41 is not merged yet: the review found issues, so the
 fixes go back to the founder before the merge. PR 42 stays open. Neither

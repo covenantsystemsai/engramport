@@ -169,6 +169,8 @@ SELECT t.expect_denied('or deleted',
   format($$DELETE FROM memory.approvals WHERE id = %L$$, :'ap_dec'));
 SELECT t.expect_denied('nor is a request',
   format($$DELETE FROM memory.approval_requests WHERE id = %L$$, :'r_dec'));
+SELECT t.expect_denied('neither table can be emptied', 'TRUNCATE memory.approvals CASCADE');
+SELECT t.expect_denied('either one', 'TRUNCATE memory.approval_requests CASCADE');
 SELECT t.expect_denied('and not even the table owner can flip the state',
   format($$UPDATE memory.memories SET approval_state = 'rejected' WHERE id = %L$$, :'m_dec'));
 

@@ -98,6 +98,10 @@ CREATE TRIGGER approval_requests_append_only BEFORE UPDATE OR DELETE ON memory.a
   FOR EACH ROW EXECUTE FUNCTION memory.approval_records_append_only();
 CREATE TRIGGER approvals_append_only BEFORE UPDATE OR DELETE ON memory.approvals
   FOR EACH ROW EXECUTE FUNCTION memory.approval_records_append_only();
+CREATE TRIGGER approval_requests_kept_all BEFORE TRUNCATE ON memory.approval_requests
+  FOR EACH STATEMENT EXECUTE FUNCTION memory.approval_records_append_only();
+CREATE TRIGGER approvals_kept_all BEFORE TRUNCATE ON memory.approvals
+  FOR EACH STATEMENT EXECUTE FUNCTION memory.approval_records_append_only();
 REVOKE ALL ON FUNCTION memory.approval_records_append_only() FROM PUBLIC;
 
 -- The trust guard from 0014, with one way through: approval_state may move

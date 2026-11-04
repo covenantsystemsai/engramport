@@ -197,7 +197,7 @@ and `<public URL>/export/callback` in Supabase's redirect URLs.
 An owner can give one other person the power to erase in, or to export, one
 namespace (D-02 item 2 and D-02.4). The database side is
 `db/migrations/0024_data_grants.sql`; its tests are `db/test/grants_test.sql` and
-`db/test/export_race_test.sh`.
+`db/test/grants_race_test.sh`.
 
 - **Who gives one.** A person holding a direct, unrestricted owner's grant over
   the namespace that allows delegation, with a fresh sign-in
@@ -213,12 +213,13 @@ namespace (D-02 item 2 and D-02.4). The database side is
   another owner who could give it, or the admin with `engramport admin grant
   revoke`), when it expires, when the owner's own authority stops being valid,
   or when the person is disabled or leaves the namespace. A decision already
-  under way is refused if the grant stops counting before it completes. An
-  export holds the authority it rests on until its download ends (at most 10
+  under way is refused if the grant stops counting before it completes: an
+  erasure decision holds the grant, its holder and their membership until it
+  is recorded, so a change made first is seen. An export holds the authority it rests on until its download ends (at most 10
   minutes), so a revocation, a disabled account or a lost membership made
   during it waits for it; a revocation made first stops it; and a grant that
   runs out by the clock while the rows are gathered stops the whole export,
-  which is then not recorded as delivered (`db/test/export_race_test.sh`).
+  which is then not recorded as delivered (`db/test/grants_race_test.sh`).
 - **The record.** An erasure or export done under a grant records both the
   grant and the owner's authority it rests on, and who decided.
 

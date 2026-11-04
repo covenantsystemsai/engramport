@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# An export under a grant racing the end of that grant. The authority an
+# Work done under a grant racing the end of that grant. The authority an
 # export rests on is held while its rows are gathered, and checked again by
 # the clock before any row leaves: a revocation made first stops the export, a
-# revocation made during it waits for it, and a grant that runs out while the
-# rows are gathered stops the whole export, which is then not recorded.
+# revocation or a lost membership during it waits for it, and a grant that
+# runs out while the rows are gathered stops the whole export, which is then
+# not recorded. A delegated erasure likewise waits for, and is stopped by, the
+# holder losing their membership first.
 # Run by run.sh after grants_test.sql, whose fixtures and helpers it reuses.
 set -euo pipefail
 : "${DATABASE_URL:?set DATABASE_URL to a throwaway database}"
 q() { psql "$DATABASE_URL" -X -q -tA -v ON_ERROR_STOP=1 "$@"; }
 
 c1=00000000-0000-7000-8000-000000000111
+k_c1=00000000-0000-7000-8000-0000000000f1
 owner=er-owner@client.test
 holder=gr-race@client.test
 
@@ -19,11 +22,12 @@ helper=$(q -c "SELECT id FROM memory.actors WHERE slug = 'gr-race'")
 
 signin() { q -F ' ' -c "SELECT user_id, session_id FROM t.sign_in('$1')"; }
 app() { q -c "SET ROLE engramport_app" -c "$1" | { grep -E '^[^ ]' || true; }; }
-# An accepted export grant for the helper, ending at the given interval from now.
+# An accepted grant for the helper, ending at the given interval from now, of
+# the given power (export unless named).
 grant() {
   local u s g sha
   read -r u s <<<"$(signin "$owner")"
-  g=$(app "SELECT memory.grant_data_power('$u', '$s', '$c1', '$helper', 'export', now() + interval '$1')")
+  g=$(app "SELECT memory.grant_data_power('$u', '$s', '$c1', '$helper', '${2:-export}', now() + interval '$1')")
   read -r u s <<<"$(signin "$holder")"
   sha=$(app "SELECT grant_sha256 FROM memory.pending_data_grants('$u', '$s') WHERE grant_id = '$g'")
   read -r u s <<<"$(signin "$holder")"
@@ -97,3 +101,36 @@ case "$rc $out" in
   *) echo "FAIL an export finished under a grant that ran out: $rc $out"; exit 1 ;;
 esac
 expect "and is not recorded as delivered" "$(completed "$x")" f
+
+echo '-- a lost membership during an export waits for it'
+g=$(grant '7 days'); read -r s x sec <<<"$(started)"
+hold engramport_app "SELECT pg_sleep(3)" -c "$(rows_sql "$s" "$x" "$sec")"
+rc=0
+out=$(q -c "SET lock_timeout = '1s'" \
+        -c "UPDATE memory.oauth_members SET revoked_at = now() WHERE actor_id = '$helper' AND namespace_id = '$c1'" 2>&1) || rc=$?
+case "$rc $out" in
+  [1-9]*"lock timeout"*) echo "pass removing the helper waits while the export is in progress" ;;
+  *) echo "FAIL a membership change slipped past an export in progress: $rc $out"; exit 1 ;;
+esac
+wait "$held"
+expect "the export finished" "$(completed "$x")" t
+
+echo '-- a membership lost first stops a delegated erasure'
+g=$(grant '7 days' erase)
+m=$(q -c "SET ROLE engramport_app" -c "BEGIN" -c "SELECT t.as_key('$k_c1', '$c1')" \
+      -c "SELECT memory.remember('fact', 'grant race: erased by a former member', 'remember', 'rest', p_claim_type => 'fact')" \
+      -c "COMMIT" | grep -E '^[0-9a-f-]{36}$')
+r=$(q -c "SET ROLE engramport_app" -c "BEGIN" -c "SELECT t.as_key('$k_c1', '$c1')" \
+      -c "SELECT memory.request_erasure(ARRAY['$m']::uuid[], 'owner_request')" -c "COMMIT" | grep -E '^[0-9a-f-]{36}$')
+read -r u s <<<"$(signin "$holder")"
+read -r ch csec <<<"$(q -F ' ' -c "SET ROLE engramport_app" -c "SELECT challenge_id, secret FROM t.erase_challenge('$u', '$s', '$r')" | tail -1)"
+hold NONE "SELECT pg_sleep(2)" \
+  -c "UPDATE memory.oauth_members SET revoked_at = now() WHERE actor_id = '$helper' AND namespace_id = '$c1'"
+rc=0
+out=$(q -c "SET ROLE engramport_app" -c "SELECT memory.decide_erasure_challenge('$u', '$s', '$ch', '$csec')" 2>&1) || rc=$?
+wait "$held"
+case "$rc $out" in
+  [1-9]*"no longer valid"*) echo "pass the erasure waits for the membership change and is refused" ;;
+  *) echo "FAIL a former member erased under a grant: $rc $out"; exit 1 ;;
+esac
+expect "the memory is untouched" "$(q -c "SELECT status FROM memory.memories WHERE id = '$m'")" active

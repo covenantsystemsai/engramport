@@ -115,6 +115,7 @@ open for the founder.
 | L4 | A claim type list could hold a blank, or be empty | Low | Fixed by a check on the column |
 | L5 | The table owner could delete or truncate authority and sign-in records | Low | Fixed. Delete and truncate are refused for every role |
 | L6 | A sign-in isn't tied to the act it was taken for, and a refused act doesn't spend it | Low | Open, by design for now. Any act still needs the holder's own fresh Google sign-in and valid authority. The approval page should take one sign-in for one named act |
+| C1 | Codex on `7fb145e`: the M2 fix had a race. A connect and an authority act using the same sign-in at the same moment could both succeed | Medium | Fixed. Connecting now records the sign-in first and then checks how it was used, so the second of two racing uses always fails. A two-session test proves it, and fails on the earlier code |
 | I7 | The admin role can create a human actor, give it a membership and grant it authority, so the admin can make an approver | Info | Open, founder decision. Options: a second person confirms each top-level grant, or the grantee accepts it with their own sign-in |
 
 Tests added for each fix: the admin can't revoke, relabel or backdate a
@@ -127,9 +128,27 @@ session are refused; and the API roles and the server hold no direct rights on
 these tables. The non-delegable test now uses the holder's own sign-in, so it
 tests the flag and not the holder check.
 
-Local verification on the fixed revision: database suite 436 checks passed,
-unit tests 76 passed, store and database tests 88 passed, typecheck clean. The
+Local verification on the fixed revision: database suite 436 checks plus the
+two race checks passed, unit tests 76 passed, store and database tests 88
+passed, typecheck clean. The
 commit, check runs and second review of the fixed head are recorded on PR 41.
+
+A second independent review of `7fb145e` confirmed M1, L3, L4 and L5 closed,
+found the same race as C1 independently, and confirmed the C1 fix. Each fix was
+switched off in turn and at least one test failed every time. Its notes, kept
+here so they are known:
+
+- While a second email is on an actor, that person also can't revoke their own
+  delegations. The admin can still revoke the parent authority, which ends
+  them. The same lockout happens if one person is added under two addresses,
+  such as a Gmail alias.
+- The record triggers stop changes and deletes through SQL statements. A
+  database owner could still switch a trigger off with a schema change. That is
+  outside what a migration can prevent, and is covered by who holds the owner
+  role.
+- Every client connection now leaves a permanent spent sign-in row.
+- 0015 was edited in place after review. That is safe only because it has never
+  been applied to any real database.
 
 **PR 42 (0016).** Codex reviewed head `8ef38ec` and raised no findings. PR 42
 is held until PR 41 merges; it then takes PR 41's fixes, is verified again, and

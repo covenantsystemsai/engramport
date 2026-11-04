@@ -185,6 +185,22 @@ export interface ExportRow {
   counts: Record<string, number> | null;
 }
 
+export interface DataGrantRow {
+  id: string;
+  namespace: string;
+  power: "erase" | "export";
+  holder: string;
+  granted_by: string;
+  parent_authority_id: string;
+  created_at: Date;
+  expires_at: Date;
+  state: "waiting" | "accepted" | "rejected" | "revoked" | "expired";
+  /** Whether it counts right now: accepted, unexpired, unrevoked, and everything it rests on still holds. */
+  valid: boolean;
+  revoked_at: Date | null;
+  revoke_reason: string | null;
+}
+
 export interface MintedKey {
   key: string;
   prefix: string;
@@ -908,6 +924,51 @@ export class AdminClient {
     );
   }
 
+  /**
+   * Delegated erase and export grants: who gave which power to whom over which
+   * namespace, until when, and whether it counts now. Never content.
+   */
+  async listDataGrants(opts: { namespace?: string; includeEnded?: boolean } = {}): Promise<DataGrantRow[]> {
+    if (opts.namespace) checkPath(opts.namespace);
+    return this.tx((c) => this.dataGrants(c, opts));
+  }
+
+  private async dataGrants(c: pg.PoolClient, opts: { namespace?: string; includeEnded?: boolean; id?: string }) {
+    return (await c.query<DataGrantRow>(
+      `SELECT g.id, n.path AS namespace, g.power::text AS power, h.slug AS holder, b.slug AS granted_by,
+              g.parent_authority_id, g.created_at, g.expires_at,
+              CASE WHEN g.revoked_at IS NOT NULL THEN 'revoked' WHEN g.rejected_at IS NOT NULL THEN 'rejected'
+                   WHEN g.expires_at <= now() THEN 'expired' WHEN g.accepted_at IS NOT NULL THEN 'accepted'
+                   ELSE 'waiting' END AS state,
+              memory.data_grant_valid(g.id) AS valid, g.revoked_at, g.revoke_reason
+       FROM memory.data_grants g
+       JOIN memory.namespaces n ON n.id = g.namespace_id
+       JOIN memory.actors h ON h.id = g.actor_id
+       JOIN memory.actors b ON b.id = g.granted_by_actor_id
+       WHERE ($1::text IS NULL OR n.path = $1 OR starts_with(n.path, $1 || '/'))
+         AND ($2 OR (g.revoked_at IS NULL AND g.rejected_at IS NULL AND g.expires_at > now()))
+         AND ($3::uuid IS NULL OR g.id = $3)
+       ORDER BY g.created_at DESC, g.id`,
+      [opts.namespace ?? null, opts.includeEnded ?? false, opts.id ?? null],
+    )).rows;
+  }
+
+  /** Revokes one delegated grant at once. The trail records it with no person, as the admin's. */
+  async revokeDataGrant(id: string, reason: string): Promise<DataGrantRow> {
+    if (!UUID.test(id)) throw new AdminError(`not a grant id: ${id}`);
+    const why = reason.trim();
+    if (!/^[a-z][a-z0-9_]{0,39}$/.test(why)) {
+      throw new AdminError("give the reason as a short code of lowercase letters and underscores, such as audit_finding");
+    }
+    return this.tx(async (c) => {
+      const cur = await c.query<{ revoked_at: Date | null }>("SELECT revoked_at FROM memory.data_grants WHERE id = $1", [id]);
+      if (!cur.rows[0]) throw new AdminError(`no grant ${id}`);
+      if (cur.rows[0].revoked_at) throw new AdminError(`grant ${id} is already revoked`);
+      await c.query("UPDATE memory.data_grants SET revoked_at = now(), revoke_reason = $2 WHERE id = $1", [id, why]);
+      return (await this.dataGrants(c, { id, includeEnded: true }))[0];
+    });
+  }
+
   /** Connections people approved: which client, as which member, and whether it still works. */
   async listConnections(opts: { namespace?: string; email?: string; includeRevoked?: boolean } = {}): Promise<ConnectionRow[]> {
     if (opts.namespace) checkPath(opts.namespace);
@@ -1081,6 +1142,12 @@ export const ADMIN_USAGE = `Usage: engramport admin <command>
                                      authority, and whether it was delivered,
                                      with counts. Never content; the admin can't
                                      export.
+  grant list [--namespace <path>] [--all]
+                                     delegated erase and export grants: who gave
+                                     which power to whom, until when, and whether
+                                     it counts now. Owners give them; the admin
+                                     can only see and revoke them.
+  grant revoke <id> --reason <code>  ends one at once
   connection list [--namespace <path>] [--email <email>] [--all]
   connection revoke <id>             ends one connection and its tokens; the
                                      membership stays, so they can connect again
@@ -1462,6 +1529,30 @@ export async function runAdmin(argv: string[], open: () => AdminClient, io: Admi
         if (typeof flags.reason !== "string") throw new UsageError("--reason is required");
         const a = await db().revokeAuthority(id, flags.reason);
         io.out(`${a.actor} can no longer approve in ${a.namespace} under ${a.id}; delegations made from it stop too`);
+        return 0;
+      }
+      case "grant list": {
+        const { positional, flags } = parseFlags(rest, { namespace: "value", all: "bool" });
+        if (positional.length) throw new UsageError(`unexpected argument ${positional[0]}`);
+        const rows = await db().listDataGrants({
+          namespace: typeof flags.namespace === "string" ? flags.namespace : undefined,
+          includeEnded: flags.all === true,
+        });
+        for (const g of rows) {
+          const state = g.state === "revoked" ? `revoked ${when(g.revoked_at!)} (${g.revoke_reason})`
+            : g.state === "accepted" ? (g.valid ? "accepted, counts now" : "accepted, but no longer counts")
+            : g.state;
+          io.out(`${g.id}  ${g.namespace}  ${g.power}  ${g.holder}  from ${g.granted_by}  until ${when(g.expires_at)}  ${state}`);
+        }
+        if (!rows.length) io.err(flags.all ? "No grants." : "No open grants. Add --all to include ended ones.");
+        return 0;
+      }
+      case "grant revoke": {
+        const { positional, flags } = parseFlags(rest, { reason: "value" });
+        const id = one(positional, "grant id");
+        if (typeof flags.reason !== "string") throw new UsageError("--reason is required");
+        const g = await db().revokeDataGrant(id, flags.reason);
+        io.out(`${g.holder} can no longer ${g.power} in ${g.namespace} under ${g.id}`);
         return 0;
       }
       case "connection list": {

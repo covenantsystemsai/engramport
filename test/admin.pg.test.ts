@@ -536,6 +536,30 @@ describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABA
     assert.equal((await store.fetch(k.key, m.id)).memory.content, text, "the admin erased nothing");
   });
 
+  test("the export ledger shows who exported what and how much, never content", async () => {
+    const ns = (await superPool.query<{ id: string }>("SELECT id FROM memory.namespaces WHERE path = $1", [cell])).rows[0].id;
+    const person = (await superPool.query<{ id: string }>(
+      "INSERT INTO memory.actors (kind, slug, display_name) VALUES ('human', $1, $1) RETURNING id", [`exporter-${run}`])).rows[0].id;
+    const grant = (await superPool.query<{ id: string }>(
+      "INSERT INTO memory.approval_authorities (actor_id, namespace_id, scope) VALUES ($1, $2, 'cell_knowledge') RETURNING id",
+      [person, ns])).rows[0].id;
+    const id = (await superPool.query<{ id: string }>(
+      `INSERT INTO memory.exports (namespace_id, actor_id, authority_id, secret_sha256, sign_in_hash, expires_at,
+         started_at, completed_at, counts)
+       VALUES ($1, $2, $3, $4, $5, now() + interval '10 minutes', now(), now(), '{"memories": 3, "links": 1}')
+       RETURNING id`, [ns, person, grant, randomBytes(32), randomBytes(32)])).rows[0].id;
+    const rows = await admin.listExports({ namespace: city, sinceMs: 3_600_000 });
+    const mine = rows.find((r) => r.id === id)!;
+    assert.deepEqual([mine.namespace, mine.actor, mine.authority_id, mine.counts], [cell, `exporter-${run}`, grant, { memories: 3, links: 1 }]);
+    assert.ok(!("secret_sha256" in mine) && !("sign_in_hash" in mine));
+    await refused(admin.listExports({ limit: 0 }), /limit/);
+    const out: string[] = [];
+    const io = { out: (l: string) => out.push(l), err: () => undefined };
+    const open = () => new AdminClient(new pg.Pool({ connectionString: urlAs(opsRole, "ops-test-only") }), pepper);
+    assert.equal(await runAdmin(["export", "list", "--namespace", cell], open, io), 0);
+    assert.ok(out.some((l) => l.includes(id) && l.includes("3 memories") && l.includes("1 links")));
+  });
+
   test("the approval trail shows who asked, where and when, and never the text", async () => {
     const k = await admin.mintKey({ namespace: cell, actor: `claude-${run}` });
     const text = `Secret pricing rule for approval ${run}`;

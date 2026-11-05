@@ -34,6 +34,7 @@ const SAMPLES = {
     `eyJ${rep("a", 12)}.eyJ${rep("b", 12)}.${rep("c", 20)}`,
     `Authorization: Bearer ${rep("t", 32)}`,
     "postgres://app:hunter2@db.example.com:5432/memory",
+    "redis://:hunter2@localhost:6379/0",
     "https://user:pw@files.example.com/report",
     "The lockbox code is 4471.",
     "password: x7!kQ",
@@ -135,6 +136,10 @@ test("metadata takes only flat, named fields that aren't never-store fields", ()
   refusedField({ buyer_name: "x" }, "metadata.buyer_name");
   refusedField({ commission_rate: 3 }, "metadata.commission_rate");
   refusedField({ door_pin: "1" }, "metadata.door_pin");
+  refusedField({ api_key: "x" }, "metadata.api_key");
+  refusedField({ service_api_key: "x" }, "metadata.service_api_key");
+  refusedField({ client_secret_value: "x" }, "metadata.client_secret_value");
+  refusedField({ account_number: "x" }, "metadata.account_number");
   refusedField({ transcript: "x" }, "metadata.transcript");
   refusedField({ nested: { a: 1 } }, "metadata.nested");
   refusedField({ "Bad Key": 1 }, "metadata.<key>");

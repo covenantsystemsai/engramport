@@ -90,7 +90,8 @@ const SECRET_PATTERNS: RegExp[] = [
   /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/, // JWTs
   /\bbearer\s{1,3}[A-Za-z0-9._~+/-]{20,}/i,
   // A URL with a password in it: scheme://user:password@host
-  /\b[a-z][a-z0-9+.-]{1,20}:\/\/[^\s:/@]{1,256}:[^\s@/]{1,256}@/i,
+  // (the user name may be empty, as in redis://:password@host)
+  /\b[a-z][a-z0-9+.-]{1,20}:\/\/[^\s:/@]{0,256}:[^\s@/]{1,256}@/i,
   // "password: x7!kQ", "door code is 4471". An assignment (colon or equals)
   // counts whatever the value; with "is", the value must have a digit or a
   // symbol, so "the password is stored in the vault" reads as prose.
@@ -320,8 +321,17 @@ const DENIED_KEY_PARTS = new Set([
   "buyer", "buyers", "seller", "sellers", "tenant", "landlord", "transcript", "quote", "verbatim",
 ]);
 
+/** Credential names that are split by underscores in practice: api_key, client_secret. */
+const DENIED_KEY_COMPOUNDS = [
+  "apikey", "accesskey", "secretkey", "privatekey", "signingkey", "authkey", "accesstoken", "refreshtoken",
+  "authtoken", "idtoken", "clientsecret", "sessionid", "phonenumber", "emailaddress", "homeaddress",
+  "accountnumber", "routingnumber", "cardnumber",
+];
+
 function deniedKey(key: string): boolean {
-  return key.split("_").some((part) => DENIED_KEY_PARTS.has(part));
+  if (key.split("_").some((part) => DENIED_KEY_PARTS.has(part))) return true;
+  const joined = key.replace(/_/g, "");
+  return DENIED_KEY_COMPOUNDS.some((c) => joined.includes(c));
 }
 
 type Field = [path: string, value: unknown];

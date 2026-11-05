@@ -70,11 +70,11 @@ export const NEVER_STORE_RULES =
 // long input can't make a check slow.
 
 const SECRET_PATTERNS: RegExp[] = [
-  /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----/,
+  /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----/, // PEM and armored PGP
   /\bep_live_[A-Za-z0-9]{8,}/, // EngramPort's own keys
   /\bep[ar]_[A-Za-z0-9_-]{40,}/, // EngramPort's OAuth codes (epa_) and refresh tokens (epr_)
   /\b(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b/, // AWS access key ids
-  /\baws_secret_access_key\s{0,3}[:=]\s{0,3}\S{16,}/i,
+  /(?<![A-Za-z0-9])aws_?secret_?access_?key["'`]?\s{0,3}[:=]\s{0,3}["'`]?[^\s"'`]{16,}/i, // bare, quoted (JSON) or camelCase
   /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}/, // GitHub tokens
   /\bgithub_pat_[A-Za-z0-9_]{20,}/,
   /\bglpat-[A-Za-z0-9_-]{20,}/, // GitLab
@@ -96,7 +96,7 @@ const SECRET_PATTERNS: RegExp[] = [
   // counts whatever the value; with "is", the value must have a digit or a
   // symbol, so "the password is stored in the vault" reads as prose.
   // The name may be quoted (JSON, YAML) or carry a prefix (db_password, DB-PASSWORD).
-  /(?<![A-Za-z0-9])(?:password|passwd|passphrase|passcode|pin\s{0,3}code|door\s{0,3}code|gate\s{0,3}code|alarm\s{0,3}code|lockbox\s{0,3}code|access\s{0,3}code|combination|api[_-]?key|client[_-]?secret|secret[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token)["'`]?\s{0,3}[:=]\s{0,3}["'`]?[^\s"'`]{4,}/i,
+  /(?<![A-Za-z0-9])(?:password|passwd|passphrase|passcode|pin\s{0,3}code|door\s{0,3}code|gate\s{0,3}code|alarm\s{0,3}code|lockbox\s{0,3}code|access\s{0,3}code|combination|api[_-]?key|client[_-]?secret|secret[_-]?key|secret[_-]?access[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token)["'`]?\s{0,3}[:=]\s{0,3}["'`]?[^\s"'`]{4,}/i,
   /\b(?:password|passwd|passphrase|passcode|pin\s{0,3}code|door\s{0,3}code|gate\s{0,3}code|alarm\s{0,3}code|lockbox\s{0,3}code|access\s{0,3}code|combination)\s{0,3}\bis\b\s{0,3}["'`]?[^\s"'`]{0,40}[0-9!@#$%^&*][^\s"'`]{0,40}/i,
 ];
 

@@ -288,8 +288,33 @@ copied into the repository, a chat, a ticket, a log or memory.
 - exports never stored;
 - erasure under D-02.
 
-The never-store list itself rests on the agents' instructions and the owner's
-review. Nothing in the server refuses a secret or a transcript yet.
+**Built, not yet enabled for real customer writes.** `src/never-store.ts` runs
+on every write path before anything is stored: `remember`, `supersede_memory`,
+`upload` and `link`, and graph rows from extraction. It refuses:
+
+- secrets with a known shape: private keys, EngramPort, AWS, GitHub, GitLab,
+  Slack, OpenAI, Anthropic, Stripe, Google, Supabase and npm keys and tokens,
+  JWTs, bearer tokens, URLs with a password, and statements of a password or
+  door, gate, alarm or lockbox code;
+- links that carry a token or a signature, in text or as `source_url`;
+- email addresses, US phone numbers, social security numbers, card numbers
+  that pass the Luhn check, and bank, routing and IBAN numbers named as such;
+- transcripts: subtitle formats, transcript file names, and three or more
+  lines with a timestamp or a speaker label;
+- structured fields (follow-on decision 9): metadata is flat, with lower-case
+  keys, short values and no key that names a never-store field (such as
+  `email`, `address`, `buyer`, `seller`, `commission`, `fee`, `password`); a
+  `source_url` must be plain https; entity types and relation predicates were
+  already limited to lower-case names.
+
+A refusal answers with code `refused`, names the field and the kind of item,
+never repeats the text, and is logged as one line with the rule and field
+only. There is no setting that turns the checks off, and if a check fails the
+write is refused. The `/mcp` error log and the unhandled-error log now carry
+an error's class only.
+
+The founder's own review and independent review of this enforcement come
+before any real customer write (decision 6).
 
 **Required before real customer memory** (founder decision 6). The Max cell
 stores no real customer memory until a write policy is enforced by the server.
@@ -350,14 +375,11 @@ never-store item that slipped in goes through D-02, as above.
 
 ## Known gaps
 
-These are code, not policy decisions, and each will be fixed in its own pull
-request.
+These are code, not policy decisions.
 
-- The `/mcp` handler logs a whole error object when a request fails. A database
-  error can include the values of the row it was writing, which could be memory
-  text. That log line should carry the error class and request id only.
-- The write policy above is not built, so the Max cell can't hold real
-  customer memory yet.
+- Names, home addresses and dollar figures in free text can't be detected
+  reliably, so they aren't refused by pattern. Metadata keys for them are.
+- Phone numbers are recognised in US formats only.
 - `src/auth.ts` writes an OIDC token cache file for the old Cloud Run backend.
   The Postgres server doesn't use it, and it goes when that backend is retired
   (D-09).

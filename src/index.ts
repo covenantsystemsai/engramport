@@ -121,7 +121,11 @@ async function hostedAuth() {
 async function startHTTP() {
   // A single malformed request or async handler rejection must not take the whole
   // process down (Express 4 does not catch async throws). Log and stay up.
-  process.on("unhandledRejection", (reason) => console.error("[engramport] unhandledRejection:", reason));
+  // The error's class only: its message could carry request content (D-07).
+  process.on("unhandledRejection", (reason) => {
+    const name = (reason as { name?: unknown })?.name;
+    console.error(JSON.stringify({ event: "unhandled_rejection", error: typeof name === "string" ? name.slice(0, 60) : typeof reason }));
+  });
   process.on("uncaughtException", (err) => console.error("[engramport] uncaughtException:", err));
 
   // Hosted mode: every backend call must carry the caller's own key.

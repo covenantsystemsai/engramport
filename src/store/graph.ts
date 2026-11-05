@@ -15,7 +15,7 @@
 import type pg from "pg";
 
 import type { KeyContext, Transport } from "./postgres.js";
-import { StoreError } from "./postgres.js";
+import { guardWrite, StoreError } from "./postgres.js";
 import { currentRequestId } from "../caller.js";
 
 export const MEMORY_LINK_KINDS = ["supports", "contradicts", "derived_from", "synthesizes", "related"] as const;
@@ -162,6 +162,18 @@ export function checkLinkInput(input: LinkInput): Required<Omit<LinkInput, "memo
   if (relations.length > MAX_RELATIONS) fail(`at most ${MAX_RELATIONS} relations per call`);
   if (memoryLinks.length > MAX_LINKS) fail(`at most ${MAX_LINKS} memory links per call`);
   if (!entities.length && !relations.length && !memoryLinks.length) fail("nothing to link: give entities, relations or memory_links");
+  // The never-store policy (D-07) covers graph rows too, from link and from extraction.
+  const text: Array<[string, unknown]> = [];
+  entities.forEach((e, i) => {
+    text.push([`entities[${i}].name`, e.name], [`entities[${i}].description`, e.description]);
+    e.aliases.forEach((a, j) => text.push([`entities[${i}].aliases[${j}]`, a]));
+  });
+  relations.forEach((r, i) => {
+    text.push([`relations[${i}].evidence`, r.evidence]);
+    if ("name" in r.source) text.push([`relations[${i}].source.name`, r.source.name]);
+    if ("name" in r.target) text.push([`relations[${i}].target.name`, r.target.name]);
+  });
+  guardWrite({ text });
   return { ...input, entities, relations, memoryLinks };
 }
 

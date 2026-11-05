@@ -70,6 +70,9 @@ const SAMPLES = {
   id_number: ["SSN 123-45-6789 on the form."],
   financial_number: [
     "Card 4111 1111 1111 1111 on file.",
+    "Card 4111 1111 1111 1111 123",
+    "4111111111111111 12/29 123",
+    "ref 99 4111 1111 1111 1111",
     "Routing number 021000021 for the wire.",
     "Bank account #12345678 at the credit union.",
     "IBAN: GB82 WEST 1234 5698 7654 32",

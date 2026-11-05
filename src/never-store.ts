@@ -149,7 +149,23 @@ const PHONE = /(?:\+?1[\s.-]{0,2})?(?:\(\s{0,2}[2-9]\d{2}\s{0,2}\)\s{0,2}|\b[2-9
  // E.164 form of a US number, with no separators: +19195550199
 const PHONE_COMPACT = /\+1[2-9]\d{2}[2-9]\d{6}(?!\d)/;
 const SSN = /\b\d{3}-\d{2}-\d{4}\b/;
-const CARD_CANDIDATE = /\b\d(?:[ -]?\d){12,18}\b/g;
+// A run of digit groups. The card may be only part of it (a CVV or expiry
+// written after it), so every run of whole groups inside is checked.
+const CARD_CANDIDATE = /\b\d(?:[ -]?\d){12,40}\b/g;
+
+/** True when some run of whole digit groups in the candidate is 13 to 19 digits and passes Luhn. */
+function hasCardNumber(candidate: string): boolean {
+  const groups = candidate.split(/[ -]/);
+  for (let i = 0; i < groups.length; i++) {
+    let digits = "";
+    for (let j = i; j < groups.length; j++) {
+      digits += groups[j];
+      if (digits.length > 19) break;
+      if (digits.length >= 13 && luhn(digits)) return true;
+    }
+  }
+  return false;
+}
 // Named bank details only: an AWS account id, which the policy lets agents
 // store as a location, is not a bank account.
 // An IBAN: two letters, two check digits, then 11 to 30 letters or digits,
@@ -299,8 +315,7 @@ export function scanText(text: string): NeverStoreRule | null {
     if (startsWithIban(m[0])) return "financial_number";
   }
   for (const m of text.matchAll(CARD_CANDIDATE)) {
-    const digits = m[0].replace(/[ -]/g, "");
-    if (digits.length >= 13 && digits.length <= 19 && luhn(digits)) return "financial_number";
+    if (hasCardNumber(m[0])) return "financial_number";
   }
   if (looksLikeTranscript(text)) return "transcript";
   return null;

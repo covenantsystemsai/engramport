@@ -139,7 +139,14 @@ precise grant. Pending, rejected, expired or revoked grants confer nothing.
 
 This closes I7: the admin can still create a person and offer them authority,
 but nothing counts until that person signs in with their own Google account and
-accepts it. The acceptance page itself is part of the approval page below.
+accepts it. The person does that on the acceptance page,
+`<public URL>/accept`: the person signs in with Google, sees everything offered
+to them (approval authority, erase and export grants, the cell-erasure-confirmer
+role) with each one's exact terms and fingerprint, picks one to accept or
+decline, and confirms. One decision per sign-in. The page is off unless
+`ENGRAMPORT_ACCEPT_PAGE=true`, which needs the Postgres store, OAuth set up and
+`<public URL>/accept/callback` in Supabase's redirect URLs; its tests are
+`test/accept-http.pg.test.ts`.
 
 **Migration 0018 (D-03B, approval challenges)**
 

@@ -82,6 +82,10 @@ const SAMPLES = {
   id_number: ["SSN 123-45-6789 on the form."],
   financial_number: [
     "Card 4111 1111 1111 1111 on file.",
+    '{"routing_number":"021000021"}',
+    '{"bank_account":"12345678"}',
+    "bankAccountNumber = 12345678",
+    "checking_acct: '9876543210'",
     "Card 4111 1111 1111 1111 123",
     "4111111111111111 12/29 123",
     "ref 99 4111 1111 1111 1111",

@@ -228,7 +228,9 @@ function ibanValid(raw: string): boolean {
   return rem === 1;
 }
 
-const ACCOUNT = /\b(?:routing|aba|iban|(?:bank|checking|savings)\s{1,3}(?:account|acct))\s{0,3}(?:number|no\.?|#)?\s{0,3}[:#]?\s{0,3}[0-9][0-9 -]{5,30}[0-9]\b/i;
+// Prose ("Routing number: 021000021"), and structured text: quoted JSON
+// names and values, snake_case and camelCase ("routing_number", "bankAccount").
+const ACCOUNT = /(?<![A-Za-z0-9])(?:routing|aba|iban|(?:bank|checking|savings)[\s_-]{0,3}(?:account|acct))[\s_-]{0,3}(?:number|num|no\.?|#)?["'`]?\s{0,3}[:=#]?\s{0,3}["'`]?[0-9][0-9 -]{5,30}[0-9](?![0-9])/i;
 
 function luhn(digits: string): boolean {
   let sum = 0;

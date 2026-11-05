@@ -28,7 +28,7 @@ with the Max setup script.
 | `kms.tf` | One customer-managed key for secrets, logs and the alarm topic, rotated yearly |
 | `ecr.tf` | The image repository: immutable tags, scan on push, KMS-encrypted, last 20 images kept |
 | `monitoring.tf` | Alarm topic, alarms (no healthy task, server 5xx, load balancer 5xx), monthly budget alert |
-| `waf.tf` | AWS WAF with AWS managed rules and a per-address rate rule, and its log with the `authorization` and `cookie` headers redacted; all off unless `enable_waf` |
+| `waf.tf` | AWS WAF with AWS managed rules and a per-address rate rule, metrics only: no request log, which would copy keys, sign-in codes and memory text; off unless `enable_waf` |
 | `outputs.tf` | The load balancer's address, the repository URL, the secret names, the NAT address |
 
 ## Guard rails in the files

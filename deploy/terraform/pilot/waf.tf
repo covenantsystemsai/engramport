@@ -2,6 +2,7 @@
 # trigger"). On before public access, a second task or real customer data.
 
 resource "aws_wafv2_web_acl" "main" {
+  # checkov:skip=CKV2_AWS_31:A WAF request log would copy keys, one-time sign-in codes and fragments of memory text; metrics only.
   count = var.enable_waf ? 1 : 0
   name  = local.name
   scope = "REGIONAL"
@@ -108,28 +109,7 @@ resource "aws_wafv2_web_acl_association" "main" {
   web_acl_arn  = aws_wafv2_web_acl.main[0].arn
 }
 
-# WAF's own log of blocked and allowed requests, with the headers that carry
-# keys and sessions redacted, so no credential is written down.
-resource "aws_cloudwatch_log_group" "waf" {
-  count             = var.enable_waf ? 1 : 0
-  name              = "aws-waf-logs-${local.name}"
-  retention_in_days = var.log_retention_days
-  kms_key_id        = aws_kms_key.stack.arn
-}
-
-resource "aws_wafv2_web_acl_logging_configuration" "main" {
-  count                   = var.enable_waf ? 1 : 0
-  resource_arn            = aws_wafv2_web_acl.main[0].arn
-  log_destination_configs = [aws_cloudwatch_log_group.waf[0].arn]
-
-  redacted_fields {
-    single_header {
-      name = "authorization"
-    }
-  }
-  redacted_fields {
-    single_header {
-      name = "cookie"
-    }
-  }
-}
+# No WAF request log. WAF would record request headers and query strings,
+# where keys (Authorization, X-API-Key) and one-time sign-in codes travel,
+# and, when a body rule matches, fragments of the request body, which is
+# memory text. Its metrics (above) show what it blocks without any of that.

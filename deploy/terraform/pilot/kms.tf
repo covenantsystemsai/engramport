@@ -29,10 +29,7 @@ data "aws_iam_policy_document" "kms" {
     condition {
       test     = "ArnLike"
       variable = "kms:EncryptionContext:aws:logs:arn"
-      values = [
-        "arn:aws:logs:${var.region}:${var.aws_account_id}:log-group:/engramport/${var.environment}/*",
-        "arn:aws:logs:${var.region}:${var.aws_account_id}:log-group:aws-waf-logs-${local.name}",
-      ]
+      values   = ["arn:aws:logs:${var.region}:${var.aws_account_id}:log-group:/engramport/${var.environment}/*"]
     }
   }
 

@@ -271,8 +271,9 @@ on is one reviewed change.
 Each is its own step, and each needs the founder's yes. Building the deploy
 files completes none of them.
 
-1. **Never-store policy (D-07)** approved (draft: `docs/never-store.md`), so
-   what Max must never store is a written rule before anything is stored.
+1. **Never-store policy (D-07)** approved Nov 5 (`docs/never-store.md`), and
+   enforced by the server, reviewed and tested, before Max stores any real
+   customer memory.
 2. **Migrations.** The remaining migrations (0002 to 0027) reviewed and
    applied to `engramport-memory`, with Supabase's security and performance
    advisors clean afterwards.

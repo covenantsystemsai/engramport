@@ -2,9 +2,10 @@
 
 What EngramPort must never keep, wherever it keeps anything.
 
-**Status.** Draft for founder decision D-07 (Nov 5). This is policy text only.
-Most of it is not enforced in code yet; "Enforcement" below says what is and
-what isn't. Until the founder approves this file, it is a draft.
+**Status.** Approved by the founder as decision D-07 on Nov 5, at the reviewed
+text of pull request 63, with two follow-on decisions recorded below. This is
+policy text. Most of it is not enforced in code yet, and approving it does not
+count as enforcing it; "Enforcement" below says what is and what isn't.
 
 **Sources.** Two, both the founder's:
 
@@ -97,7 +98,10 @@ The founder's decisions of Nov 5 add, for transactions:
   named by an opaque transaction or property reference, with a link to the
   authorized system that holds the address. An address that is demonstrably a
   non-residential business location, and not anyone's home, may be stored when
-  it is needed and authorized (decision 1).
+  it is needed and authorized (decision 1). For the Max pilot, only the cell's
+  owner or a delegate the owner has explicitly authorized may approve storing
+  one. An agent can't authorize it, and the default stays the opaque reference
+  (follow-on decision 8).
 - **No names of buyers, sellers or other parties to a transaction.** Names
   needed to carry out a transaction stay in the client's authorized system of
   record (decision 2).
@@ -306,14 +310,22 @@ private keys, connection strings), a source kind of transcript and an upload of
 a whole transcript, and states the cell's rules in the tool's answer so agents
 see them (build item 5 in `docs/spec-gap-analysis.md`).
 
+It also restricts structured fields wherever practical (follow-on decision 9):
+where a field's shape is known, such as metadata keys, source kinds and graph
+relation types, only the expected values are accepted, so a never-store item
+can't ride in through a field that isn't checked as text.
+
 Approving this policy does not approve that enforcement. Building it is its own
-decision and its own pull request, with its own review.
+pull request, with independent review and negative tests, before real customer
+writes are turned on.
 
 **Limits, said plainly.** Personal details can't be recognised reliably by
 pattern. The write policy will lower the risk for secrets and transcripts. It
 will not catch every phone number, address or account detail. For those, the
-agents' instructions and the owner's review remain the control. This policy
-does not claim more.
+agents' instructions, the owner's review and the structured field
+restrictions are the controls, and none of them is a guarantee against
+sensitive data leaking in (follow-on decision 9). This policy does not claim
+more.
 
 ## When something is stored anyway
 
@@ -368,7 +380,16 @@ applied in the sections above.
 The two corrections, on Terraform state and on AWS Secrets Manager, are applied
 under "S3" and "What the policy covers".
 
+## Follow-on decisions at approval
+
+Recorded by the founder when approving D-07 on Nov 5.
+
+| # | Decision |
+|---|---|
+| 8 | For the Max pilot, only the customer cell's owner or an explicitly authorized delegate may approve storing a demonstrably non-residential business address. Agents can't authorize it themselves. The default remains an opaque property reference |
+| 9 | The documented limits of pattern matching are accepted, but agent instructions and human review are not a guarantee against sensitive-data leakage. The enforcement pull request adds structured field restrictions wherever practical, as well as secret detection and fail-closed writes |
+
 ## Open founder decisions
 
-None from the seven questions. A case none of the decisions above settles will
+None from the seven questions or the two follow-on decisions. A case none of the decisions above settles will
 be listed here, as a question, rather than decided in this file.

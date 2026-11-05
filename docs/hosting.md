@@ -172,9 +172,11 @@ Details: `docs/oauth-setup.md`.
   in the image, the task definition, logs or `/health`. The server logs one
   line per request (id, method, route, status, time) and never a key, a body,
   a query string or memory text.
-- Secrets are encrypted with the AWS-managed Secrets Manager key. A
-  customer-managed KMS key ($1 a month) is a later option if a separate key
-  policy is wanted.
+- Secrets, log groups and the alarm topic are encrypted with one
+  customer-managed KMS key for the stack ($1 a month, rotated yearly). Its key
+  policy lets CloudWatch Logs use it only for this stack's log groups and
+  CloudWatch alarms only to publish to the alarm topic. The execution role
+  may decrypt with it only through Secrets Manager.
 - The Supabase URL and publishable key are configuration, not secrets: the
   publishable key is public by design.
 - **The key pepper is never rotated casually.** Every API key is stored only
@@ -194,12 +196,12 @@ traffic.
 | Application Load Balancer | $0.0225 an hour plus $0.008 per capacity unit-hour | $17 to $20 | $17 to $20 |
 | NAT gateway | $0.045 an hour plus $0.045 per GB through it | $33 to $34 | $33 to $34 |
 | Public IPv4 addresses (NAT gateway; load balancer in two zones once public) | $0.005 an hour each | $3.65 now, $11 once public | $3.65 now, $11 once public |
-| Secrets Manager, 3 secrets | $0.40 each a month | $1.20 | $1.20 |
+| Secrets Manager, 3 secrets, and the stack's KMS key | $0.40 each a month; $1 for the key | $2.20 | $2.20 |
 | CloudWatch logs and alarms | $0.50 per GB ingested; first 5 GB and 10 alarms free | $0 to $3 | $0 to $3 |
 | ECR image storage, S3 state, Route 53 zone | | about $1 | about $1 |
-| **AWS subtotal** | | **about $72 to $83** | **about $86 to $98** |
+| **AWS subtotal** | | **about $73 to $84** | **about $87 to $99** |
 | Supabase Pro (includes Micro compute) | $25, or $30 with Small compute | $25 to $30 | $25 to $30 |
-| **Total** | | **about $97 to $113** | **about $111 to $128** |
+| **Total** | | **about $98 to $114** | **about $112 to $129** |
 
 Optional, not included:
 
@@ -303,9 +305,8 @@ In separate pull requests, each locally validated and independently reviewed:
    `SIGTERM`, `deploy/engramport.env.example` naming every setting with no
    secret values, and `deploy/certs/` for Supabase's CA certificate. See
    "The container" below.
-2. Terraform: network, load balancer, certificate, ECS service and task
-   definition, IAM roles, secrets (names only), logs, alarms, budget, state
-   bucket, with public access and WAF off by default.
+2. Terraform (done): `deploy/terraform/`, with public access and WAF off by
+   default. See `deploy/terraform/README.md`.
 3. The Max pilot setup script: dry run by default, scoped to one named
    namespace, fail-closed, with an install and verification guide.
 

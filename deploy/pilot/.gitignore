@@ -1,0 +1,5 @@
+# A real pilot config names a person's email: keep it out of the repository.
+*.json
+!*.example.json
+# Minted keys never belong here (the setup script refuses a git tree anyway).
+*.jsonl

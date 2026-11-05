@@ -322,8 +322,28 @@ function checkEmail(email: string): string {
   return e;
 }
 
+/** What a pilot setup would find in the database, read without changing anything. */
+export interface PilotTarget {
+  /** Each piece of the path, city first: whether it exists, and as what. */
+  pieces: { path: string; exists: boolean; level: string | null; purpose: NamespacePurpose | null }[];
+  /** Actor names that are already taken. */
+  takenActors: string[];
+  /** Whether the database has every migration this tool needs. */
+  schemaReady: boolean;
+  /** Embedding models the database knows. */
+  models: string[];
+}
+
+/** The newest function the setup relies on: from 0027, the last migration. */
+const REQUIRED_FUNCTION = "memory.offer_data_grant(uuid,uuid,uuid,text,memory.data_power,timestamptz)";
+
 export class AdminClient {
-  constructor(private readonly pool: pg.Pool, private readonly pepper?: Buffer) {}
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly pepper?: Buffer,
+    /** Set inside transaction(): every call runs on this one connection. */
+    private readonly held?: pg.PoolClient,
+  ) {}
 
   static fromEnv(env: NodeJS.ProcessEnv = process.env): AdminClient {
     const problems = adminUrlProblems(env.ENGRAMPORT_ADMIN_DATABASE_URL);
@@ -336,23 +356,29 @@ export class AdminClient {
     await this.pool.end();
   }
 
-  /** One transaction, as engramport_admin. */
+  /** Begin a transaction as engramport_admin. */
+  private static async enter(client: pg.PoolClient, readOnly: boolean): Promise<void> {
+    await client.query(readOnly ? "BEGIN READ ONLY" : "BEGIN");
+    try {
+      await client.query(`SET LOCAL ROLE ${ADMIN_ROLE}`);
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "42501" || code === "22023" || code === "42704") {
+        throw new AdminError(
+          `this login cannot switch to ${ADMIN_ROLE}. Grant it with: GRANT ${ADMIN_ROLE} TO <login role> WITH INHERIT FALSE, SET TRUE`,
+        );
+      }
+      throw err;
+    }
+    await client.query("SELECT set_config('search_path', 'pg_catalog', true)");
+  }
+
+  /** One transaction, as engramport_admin; inside transaction(), part of that one. */
   private async tx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
+    if (this.held) return fn(this.held);
     const client = await this.pool.connect();
     try {
-      await client.query("BEGIN");
-      try {
-        await client.query(`SET LOCAL ROLE ${ADMIN_ROLE}`);
-      } catch (err) {
-        const code = (err as { code?: string }).code;
-        if (code === "42501" || code === "22023" || code === "42704") {
-          throw new AdminError(
-            `this login cannot switch to ${ADMIN_ROLE}. Grant it with: GRANT ${ADMIN_ROLE} TO <login role> WITH INHERIT FALSE, SET TRUE`,
-          );
-        }
-        throw err;
-      }
-      await client.query("SELECT set_config('search_path', 'pg_catalog', true)");
+      await AdminClient.enter(client, false);
       const out = await fn(client);
       await client.query("COMMIT");
       return out;
@@ -362,6 +388,54 @@ export class AdminClient {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Several admin calls as one transaction: all of them, or none. With
+   * `readOnly`, the database itself refuses any write, and the transaction
+   * is rolled back at the end whatever happened.
+   */
+  async transaction<T>(fn: (admin: AdminClient) => Promise<T>, opts: { readOnly?: boolean } = {}): Promise<T> {
+    if (this.held) throw new AdminError("already inside a transaction");
+    const client = await this.pool.connect();
+    try {
+      await AdminClient.enter(client, opts.readOnly === true);
+      const out = await fn(new AdminClient(this.pool, this.pepper, client));
+      await client.query(opts.readOnly ? "ROLLBACK" : "COMMIT");
+      return out;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** Whether this client can mint keys (it has the pepper). */
+  get canMintKeys(): boolean {
+    return this.pepper !== undefined;
+  }
+
+  /** What a pilot setup for `path` would find; reads only. */
+  async pilotTarget(path: string, actors: string[]): Promise<PilotTarget> {
+    const parts = checkPath(path);
+    for (const a of actors) checkSlug(a, "actor name");
+    return this.tx(async (c) => {
+      const pieces: PilotTarget["pieces"] = [];
+      for (let i = 1; i <= parts.length; i++) {
+        const p = parts.slice(0, i).join("/");
+        const r = await c.query<{ level: string; purpose: NamespacePurpose }>(
+          "SELECT level::text AS level, purpose::text AS purpose FROM memory.namespaces WHERE path = $1", [p]);
+        pieces.push({ path: p, exists: !!r.rows[0], level: r.rows[0]?.level ?? null, purpose: r.rows[0]?.purpose ?? null });
+      }
+      const taken = await c.query<{ slug: string }>(
+        "SELECT slug FROM memory.actors WHERE slug = ANY($1::text[]) ORDER BY slug", [actors]);
+      const schema = await c.query<{ ok: boolean }>("SELECT to_regprocedure($1) IS NOT NULL AS ok", [REQUIRED_FUNCTION]);
+      const models = schema.rows[0].ok
+        ? (await c.query<{ model: string }>("SELECT model FROM memory.embedding_models ORDER BY model")).rows.map((r) => r.model)
+        : [];
+      return { pieces, takenActors: taken.rows.map((r) => r.slug), schemaReady: schema.rows[0].ok, models };
+    });
   }
 
   private requirePepper(): Buffer {
@@ -1273,6 +1347,12 @@ export class AdminClient {
 
 export const ADMIN_USAGE = `Usage: engramport admin <command>
 
+  pilot setup --config <file> --namespace <city/tower/cell>
+              [--apply --confirm <city/tower/cell> --keys-out <new file>]
+                                     set up one new pilot cell from a reviewed config
+                                     (docs/install.md); a dry run unless --apply,
+                                     all or nothing, keys only to a new 0600 file
+
   namespace create <path> [--company] [--embedding-model <model>]
                                      path is city, city/tower or city/tower/cell;
                                      --company makes a new city your company's own:
@@ -1443,6 +1523,45 @@ export async function runAdmin(argv: string[], open: () => AdminClient, io: Admi
     const cmd = group === "audit" ? "audit" : `${group} ${action ?? ""}`.trim();
     if (cmd === "audit" && action !== undefined) rest.unshift(action);
     switch (cmd) {
+      case "pilot setup": {
+        const { positional, flags } = parseFlags(rest, {
+          config: "value", namespace: "value", apply: "bool", confirm: "value", "keys-out": "value",
+        });
+        if (positional.length) throw new UsageError(`unexpected argument ${positional[0]}`);
+        if (typeof flags.config !== "string" || typeof flags.namespace !== "string") {
+          throw new UsageError("--config and --namespace are required");
+        }
+        const { readFileSync } = await import("node:fs");
+        const pilot = await import("./pilot-setup.js");
+        const cfg = pilot.parsePilotConfig(readFileSync(flags.config, "utf8"));
+        if (cfg.namespace !== flags.namespace) {
+          throw new AdminError(`--namespace ${flags.namespace} is not the config's namespace ${cfg.namespace}; nothing changed`);
+        }
+        if (flags.apply !== true) {
+          if (flags.confirm !== undefined || flags["keys-out"] !== undefined) {
+            throw new UsageError("--confirm and --keys-out go with --apply");
+          }
+          const plan = await pilot.planPilot(db(), cfg);
+          io.out(`Dry run for ${cfg.namespace}: nothing was changed.`);
+          for (const step of plan.steps) io.out(`  ${step}`);
+          if (plan.problems.length) {
+            io.err(`Refused:\n- ${plan.problems.join("\n- ")}`);
+            return 1;
+          }
+          io.out(`To apply: add --apply --confirm ${cfg.namespace} --keys-out <a new file outside any repository>`);
+          return 0;
+        }
+        if (flags.confirm !== cfg.namespace) {
+          throw new UsageError(`--apply needs --confirm ${cfg.namespace}, typed exactly`);
+        }
+        if (typeof flags["keys-out"] !== "string") throw new UsageError("--apply needs --keys-out <a new file>");
+        const done = await pilot.applyPilot(db(), cfg, flags["keys-out"]);
+        io.out(`Set up ${cfg.namespace}:`);
+        for (const step of done.steps) io.out(`  ${step}`);
+        for (const k of done.keys) io.out(`  key ${k.prefix} for ${k.actor}, expires ${when(k.expires_at)}`);
+        io.err(`The ${done.keys.length} key(s) are in ${done.keysFile} (readable only by you). Move each into your secrets manager, then delete the file.`);
+        return 0;
+      }
       case "namespace create": {
         const { positional, flags } = parseFlags(rest, { company: "bool", "embedding-model": "value" });
         const path = one(positional, "namespace path");

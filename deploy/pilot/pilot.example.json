@@ -1,0 +1,15 @@
+{
+  "namespace": "example-client/operations/pilot",
+  "embedding_model": "gte-small",
+  "owner": {
+    "actor": "example-owner",
+    "display": "Example cell owner",
+    "email": "owner@example.com",
+    "authority": { "scope": "cell_knowledge", "can_delegate": false, "expires_in": "180d" }
+  },
+  "agents": [
+    { "actor": "example-claude", "display": "Claude for the example cell", "read_only": false, "expires_in": "90d" },
+    { "actor": "example-codex", "display": "Codex for the example cell", "read_only": false, "expires_in": "90d" },
+    { "actor": "example-grok", "display": "Grok Bot for the example cell", "read_only": true, "expires_in": "30d" }
+  ]
+}

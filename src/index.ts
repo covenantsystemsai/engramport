@@ -85,6 +85,9 @@ async function hostedAuth() {
   const exportPage = config.exportPage
     ? (await import("./export.js")).createExportRouter({ publicUrl: config.publicUrl, pepper, db: sharedPool(), identity })
     : undefined;
+  const restore = config.restorePage
+    ? (await import("./restore.js")).createRestoreRouter({ publicUrl: config.publicUrl, pepper, db: sharedPool(), identity })
+    : undefined;
   return {
     authenticate,
     resourceMetadataUrl: resourceMetadataUrl(config.publicUrl),
@@ -98,6 +101,7 @@ async function hostedAuth() {
     ...(approve ? { approve } : {}),
     ...(erase ? { erase } : {}),
     ...(exportPage ? { exportPage } : {}),
+    ...(restore ? { restore } : {}),
   };
 }
 

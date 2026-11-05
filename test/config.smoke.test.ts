@@ -153,4 +153,11 @@ test("approval page: off by default; when on it needs OAuth for its Google sign-
     /EXPORT_PAGE needs ENGRAMPORT_OAUTH=true/);
   assert.match(configProblems(resolveConfig(env({ ENGRAMPORT_EXPORT_PAGE: "true", ENGRAMPORT_API_URL: "https://api.example.com" })), "http")[0],
     /EXPORT_PAGE needs ENGRAMPORT_STORE=postgres/);
+  // And the restore page.
+  assert.equal(resolveConfig(env({})).restorePage, false);
+  assert.deepEqual(configProblems(pg({ ...on, ENGRAMPORT_RESTORE_PAGE: "true" }), "http"), []);
+  assert.match(configProblems(pg({ ...on, ENGRAMPORT_OAUTH: "", ENGRAMPORT_RESTORE_PAGE: "true" }), "http").join(" "),
+    /RESTORE_PAGE needs ENGRAMPORT_OAUTH=true/);
+  assert.match(configProblems(resolveConfig(env({ ENGRAMPORT_RESTORE_PAGE: "true", ENGRAMPORT_API_URL: "https://api.example.com" })), "http")[0],
+    /RESTORE_PAGE needs ENGRAMPORT_STORE=postgres/);
 });

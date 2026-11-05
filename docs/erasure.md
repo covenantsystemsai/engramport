@@ -48,7 +48,7 @@ Founder decision D-02, decided Nov 4:
 | Export by an owner: `/export` | Built, off unless `ENGRAMPORT_EXPORT_PAGE=true`; see Export below |
 | Delegated erase and export grants | Built in the database (`0024_data_grants.sql`); the page where owners give them and holders accept them is next |
 | Whole-cell erasure with a cell-erasure-confirmer (D-02.1a) | Built in the database (`0026_cell_erasure.sql`) with the admin commands `confirmer` and `cell-erasure`; the pages for starting, confirming and accepting the role are next. See Whole-cell erasure below |
-| 30-day retraction restore window | Built in the database (`0025_retraction_restore.sql`) with the admin ledger `engramport admin restore list`; the restore page is next. See Retraction and restoring below |
+| 30-day retraction restore window | Built: the database (`0025_retraction_restore.sql`), the admin ledger `engramport admin restore list`, and the page `/restore`, off unless `ENGRAMPORT_RESTORE_PAGE=true`. See Retraction and restoring below |
 
 ## The page
 
@@ -275,8 +275,21 @@ Founder decision D-02.3. The database side is
   so a later erasure leaves no fingerprint there. The admin sees them with
   `engramport admin restore list`, never the text.
 
-The page where a person reviews a retracted memory and restores it is next;
-until then these are database functions only.
+### The restore page
+
+A person with authority opens `<public URL>/restore/<memory id>`. The page asks
+for a fresh Google sign-in, shows the memory's text, when it was retracted, the
+last moment it can be restored and what restoring makes it, then asks for a
+second, explicit confirmation. Someone without authority sees the same page as
+for a memory that doesn't exist. A retraction past its 30 days, or one that
+can't be restored for another reason, is shown with the reason and nothing to
+press. Like the other pages it carries no scripts, can't be framed, keeps its
+secret only in an encrypted cookie of its own that no other page's cookie can
+stand in for, and uses each sign-in once.
+
+The page is off unless `ENGRAMPORT_RESTORE_PAGE=true`, which needs the Postgres
+store, OAuth set up and `<public URL>/restore/callback` in Supabase's redirect
+URLs (see `docs/oauth-setup.md`). Its tests are `test/restore-http.pg.test.ts`.
 
 ## Whole-cell erasure
 

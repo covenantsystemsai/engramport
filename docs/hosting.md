@@ -141,8 +141,9 @@ Details: `docs/oauth-setup.md`.
   task must pass its health checks before the old one is drained. The ECS
   deployment circuit breaker rolls back a deploy whose tasks keep failing.
 - **Stopping.** ECS sends `SIGTERM`, waits up to 30 seconds, then stops the
-  task. The server will close its listener, let requests in flight finish and
-  close its database pool on `SIGTERM` (added with the container files). A
+  task. On `SIGTERM` the server stops taking connections, lets requests in
+  flight finish for up to 25 seconds, closes its database pool and exits
+  (`src/shutdown.ts`). A
   request still running at the deadline, such as a very long export, is cut;
   the person starts it again. Single-use sign-ins and challenges mean a cut
   decision is never half-applied: each decision is one database transaction.
@@ -298,11 +299,39 @@ for a customer's security review, not for the pilot.
 
 In separate pull requests, each locally validated and independently reviewed:
 
-1. Container: a production Dockerfile for the Postgres server (replacing the
-   one aimed at the old Cloud Run backend), graceful shutdown on `SIGTERM`,
-   and an environment template naming every setting with no values.
+1. Container (done): the `Dockerfile`, `.dockerignore`, graceful shutdown on
+   `SIGTERM`, `deploy/engramport.env.example` naming every setting with no
+   secret values, and `deploy/certs/` for Supabase's CA certificate. See
+   "The container" below.
 2. Terraform: network, load balancer, certificate, ECS service and task
    definition, IAM roles, secrets (names only), logs, alarms, budget, state
    bucket, with public access and WAF off by default.
 3. The Max pilot setup script: dry run by default, scoped to one named
    namespace, fail-closed, with an install and verification guide.
+
+## The container
+
+- `Dockerfile`: two stages. The first runs `npm ci` and the TypeScript build,
+  then drops development packages; the second carries only `package.json`,
+  `node_modules` and `dist`, plus `deploy/certs/`. The Node 22 base image is
+  pinned by digest, a multi-architecture index, so the same pin builds for
+  Graviton (arm64). The image runs as the `node` user; every file in it is
+  owned by root, so the server can't change its own code.
+- `.dockerignore` lets in only `package.json`, `package-lock.json`,
+  `tsconfig.json`, `src/` and `deploy/certs/`. Any `.env` file, the tests, the
+  docs and the database folder stay out of the build.
+- `deploy/engramport.env.example` names every production setting, which ones
+  come from Secrets Manager, and every page left off.
+- `deploy/certs/README.md` says where to get Supabase's CA certificate. If it
+  is missing or wrong, the server can't connect and the task never becomes
+  healthy: it fails closed.
+- Missing or invalid settings stop the server at start with exit code 1 and a
+  message naming each one.
+
+Checked locally (Nov 5, 2026) on an x86 build: the image runs with a
+read-only root filesystem, `/tmp` as a scratch mount, every Linux capability
+dropped and no new privileges; `/health` answers 200; `/mcp` refuses a missing
+or unknown key with 401 after a real database lookup; `docker stop` ends it in
+under a second with exit code 0, "stopped cleanly" and its database
+connection closed; no key appears in its logs. An arm64 build is part of the
+install guide.

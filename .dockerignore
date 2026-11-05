@@ -1,17 +1,10 @@
-node_modules
-.git
-.gitignore
-.env
-.env.*
-*.log
-*.md
-.vscode
-.idea
-src
-tsconfig.json
-test
-tests
-__tests__
-coverage
-.DS_Store
-Thumbs.db
+# Only what the image needs goes into the build: everything else, including
+# any .env file, keys, tests, docs and the database folder, stays out.
+*
+!package.json
+!package-lock.json
+!tsconfig.json
+!src/
+!src/**
+!deploy/certs/
+!deploy/certs/**

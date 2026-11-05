@@ -24,6 +24,7 @@ import { setCallerRequired } from "./caller.js";
 import { runDoctor } from "./doctor.js";
 import { prewarmToken } from "./auth.js";
 import { decodePepper } from "./keys.js";
+import { stopOnSignals } from "./shutdown.js";
 
 // CLI: `node dist/index.js prewarm` mints an OIDC token in this process and
 // writes the cross-process disk cache, then exits. Run from a working shell
@@ -127,7 +128,7 @@ async function startHTTP() {
   setCallerRequired(true);
   const app = createHttpApp({ apiUrl: config.apiUrl, namespace: config.namespace, ...(await hostedAuth()) });
 
-  app.listen(config.port, "0.0.0.0", () => {
+  const server = app.listen(config.port, "0.0.0.0", () => {
     // Banner to STDERR unconditionally. stdout is reserved for protocol output
     // (JSON-RPC when MCP clients connect to /mcp). 2.0.0 used console.log here
     // and broke Claude Desktop's stdio MCP integration when users following
@@ -161,6 +162,12 @@ async function startHTTP() {
 └──────────────────────────────────────────────────────┘
     `);
   });
+
+  // ECS stops a task with SIGTERM: finish what is in flight, then close the pool.
+  const closers = config.store === "postgres"
+    ? [async () => (await import("./tools/store.js")).endSharedPool()]
+    : [];
+  stopOnSignals(server, { closers });
 }
 
 // ═══════════════════════════════════════════════════════════

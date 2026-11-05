@@ -32,6 +32,13 @@ export function sharedPool(): pg.Pool {
   return sharedPg;
 }
 
+/** Close the shared pool, if one was opened, when the server stops. */
+export async function endSharedPool(): Promise<void> {
+  const pool = sharedPg;
+  sharedPg = undefined;
+  await pool?.end();
+}
+
 /**
  * The providers this server has. Each namespace's text goes only to the one
  * for its own model, so adding an OpenAI key never sends a gte-small

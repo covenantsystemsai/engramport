@@ -18,6 +18,8 @@ const SAMPLES = {
   secret: [
     `-----BEGIN ${"RSA "}PRIVATE KEY-----\nMIIB`,
     `ep_live_${rep("A", 22)}.${rep("b", 43)}`,
+    `ep${"a"}_${rep("c", 43)}`,
+    `ep${"r"}_${rep("d", 41)}-_`,
     `${"AK"}IA${rep("Q", 16)}`,
     `aws_secret_access_key = ${rep("x", 40)}`,
     `${"gh"}p_${rep("a", 36)}`,
@@ -76,6 +78,7 @@ const ALLOWED = [
   "Agenda:\n9:00 Kickoff: intro\n9:30 Review: open items\n10:00 Wrap-up: next steps",
   "Status: waiting on the founder since Nov 4. Owner: build agent.",
   "Clone with git@github.com:example/repo.git",
+  "The connector registered as client epc_abcdefghijklmnopqrstuvwx.",
   "The password is stored in the vault, never here.",
   "Ticket AB12 CDEF GHIJ KLMN 0 is a made-up code, not an IBAN.",
   "Town ordinance 7-12 checked 2026-11-01; source https://example.gov/ordinances?chapter=7",

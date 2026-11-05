@@ -292,10 +292,11 @@ copied into the repository, a chat, a ticket, a log or memory.
 on every write path before anything is stored: `remember`, `supersede_memory`,
 `upload` and `link`, and graph rows from extraction. It refuses:
 
-- secrets with a known shape: private keys, EngramPort, AWS, GitHub, GitLab,
-  Slack, OpenAI, Anthropic, Stripe, Google, Supabase and npm keys and tokens,
-  JWTs, bearer tokens, URLs with a password, and statements of a password or
-  door, gate, alarm or lockbox code;
+- secrets with a known shape: private keys; EngramPort's own API keys, OAuth
+  codes and refresh tokens; AWS, GitHub, GitLab, Slack, OpenAI, Anthropic,
+  Stripe, Google, Supabase and npm keys and tokens; JWTs, bearer tokens, URLs
+  with a password, and statements of a password or door, gate, alarm or
+  lockbox code;
 - links that carry a token or a signature, in text or as `source_url`;
 - email addresses, US phone numbers, social security numbers, card numbers
   that pass the Luhn check, IBANs that pass their check digits, and bank and

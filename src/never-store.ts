@@ -72,6 +72,7 @@ export const NEVER_STORE_RULES =
 const SECRET_PATTERNS: RegExp[] = [
   /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----/,
   /\bep_live_[A-Za-z0-9]{8,}/, // EngramPort's own keys
+  /\bep[ar]_[A-Za-z0-9_-]{40,}/, // EngramPort's OAuth codes (epa_) and refresh tokens (epr_)
   /\b(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b/, // AWS access key ids
   /\baws_secret_access_key\s{0,3}[:=]\s{0,3}\S{16,}/i,
   /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}/, // GitHub tokens

@@ -118,7 +118,7 @@ Categories follow section 3 of the directive. "Section" is the directive section
 | Item | Conflict | Proposed fix |
 | --- | --- | --- |
 | `ENGRAMPORT_STORE` defaults to `eidetic` (`src/config.ts`) | The old backend is still the default | Default to `postgres`, keep `eidetic` as an explicit opt-in (one small PR) |
-| `Dockerfile` targets the old Cloud Run backend and its service account | The image does not run the Postgres store as designed | Replaced by the container files for D-06 (`docs/hosting.md`); until then do not use this image |
+| `Dockerfile` targets the old Cloud Run backend and its service account | The image does not run the Postgres store as designed | Replaced for D-06: the `Dockerfile` now builds the Postgres server (`docs/hosting.md`, "The container") |
 | `package.json` description says "bring-your-own-LLM (any model via OpenRouter)" | Not what the product is now | Fix with the next release under D-08 |
 | `publish.yml` publishes to npm on any `v*` tag | A tag is a release; the published packages predate all Postgres work | Leave alone until D-08; consider an approval environment on that job |
 | Memory text may carry "approved" in prose | Section 6.3: a model writing "approved" is not an authorization | The trust layer stores approval only as a separate, server-recorded event |

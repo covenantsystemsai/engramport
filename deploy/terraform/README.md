@@ -6,8 +6,7 @@ Supabase project and AWS Secrets Manager.
 
 These are files only. Nothing here has been applied. Every `terraform apply`
 creates or changes billable AWS resources and is its own founder decision;
-the order of steps and their checks will be in `docs/install.md`, which comes
-with the Max setup script.
+the order of steps and their checks is in `docs/install.md`.
 
 ## Layout
 

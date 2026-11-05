@@ -307,8 +307,9 @@ In separate pull requests, each locally validated and independently reviewed:
    "The container" below.
 2. Terraform (done): `deploy/terraform/`, with public access and WAF off by
    default. See `deploy/terraform/README.md`.
-3. The Max pilot setup script: dry run by default, scoped to one named
-   namespace, fail-closed, with an install and verification guide.
+3. The Max pilot setup script (done): `engramport admin pilot setup`, a dry
+   run by default, scoped to one named namespace, fail-closed, with the
+   install and verification guide in `docs/install.md`.
 
 ## The container
 

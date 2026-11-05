@@ -42,6 +42,8 @@ export interface HttpAppOptions {
   exportPage?: Router;
   /** The restore page (createRestoreRouter), served without a key. */
   restore?: Router;
+  /** The whole-cell erasure pages (createCellErasureRouter), served without a key. */
+  cellErasure?: Router;
   /** RFC 9728 metadata URL named in every 401, so clients can start sign-in. */
   resourceMetadataUrl?: string;
   /** Checks a key before any route runs: false means unknown, revoked or expired. */
@@ -97,6 +99,7 @@ export function createHttpApp(opts: HttpAppOptions): express.Express {
   if (opts.erase) app.use(opts.erase);
   if (opts.exportPage) app.use(opts.exportPage);
   if (opts.restore) app.use(opts.restore);
+  if (opts.cellErasure) app.use(opts.cellErasure);
 
   const challenge = (error?: string) =>
     [

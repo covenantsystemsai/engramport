@@ -47,7 +47,7 @@ Founder decision D-02, decided Nov 4:
 | The owner's page to review and confirm: `/erase/<request id>` | Built, off unless `ENGRAMPORT_ERASURE_PAGE=true` |
 | Export by an owner: `/export` | Built, off unless `ENGRAMPORT_EXPORT_PAGE=true`; see Export below |
 | Delegated erase and export grants | Built in the database (`0024_data_grants.sql`); the page where owners give them and holders accept them is next |
-| Whole-cell erasure with a cell-erasure-confirmer (D-02.1a) | Built in the database (`0026_cell_erasure.sql`) with the admin commands `confirmer` and `cell-erasure`; the pages for starting, confirming and accepting the role are next. See Whole-cell erasure below |
+| Whole-cell erasure with a cell-erasure-confirmer (D-02.1a) | Built: the database (`0026_cell_erasure.sql`), the admin commands `confirmer` and `cell-erasure`, and the pages for starting and confirming (`/cell-erasure`), off unless `ENGRAMPORT_CELL_ERASURE_PAGE=true`; the page for accepting the role is next. See Whole-cell erasure below |
 | 30-day retraction restore window | Built: the database (`0025_retraction_restore.sql`), the admin ledger `engramport admin restore list`, and the page `/restore`, off unless `ENGRAMPORT_RESTORE_PAGE=true`. See Retraction and restoring below |
 
 ## The page
@@ -340,5 +340,25 @@ Founder decisions D-02.1 and D-02.1a. The database side is
   `engramport admin confirmer list`), never content or secrets, and can't start
   or confirm one.
 
-The pages where an owner starts one, a confirmer confirms one, and a person
-accepts the role are next; until then these are database functions only.
+### The pages
+
+- **The owner** opens `<public URL>/cell-erasure/start/<cell id>`, signs in with
+  Google, sees what the cell holds as counts, picks a reason and starts it, then
+  confirms a second time, because starting freezes the cell. The last page gives
+  the link to send the confirmer. If one is already waiting, the page says so
+  with nothing to press.
+- **The confirmer** opens `<public URL>/cell-erasure/<request id>`, signs in,
+  sees the cell, the reason, who started it, when it lapses and fresh counts,
+  never content, chooses to erase it, and confirms a second time. A request that
+  was already confirmed, cancelled or has lapsed shows that with nothing to
+  press. Someone without the role sees the same page as for a request that
+  doesn't exist; whoever started it is refused.
+
+Like the other pages they carry no scripts, can't be framed, keep the visit and
+the challenge's secret only in an encrypted cookie of their own that no other
+page's cookie can stand in for, and use each sign-in once. They are off unless
+`ENGRAMPORT_CELL_ERASURE_PAGE=true`, which needs the Postgres store, OAuth set
+up and `<public URL>/cell-erasure/callback` in Supabase's redirect URLs. Their
+tests are `test/cell-erasure-http.pg.test.ts`. The page where a person accepts
+the confirmer role is next; until then it is accepted through the database
+functions only.

@@ -343,7 +343,7 @@ REVOKE ALL ON FUNCTION memory.cell_open_erasure(uuid) FROM PUBLIC;
 
 -- Every write into a cell shares a lock on the cell's row with the other
 -- writes, and conflicts with the one request_cell_erasure and the decision
--- take. So a write already under way finishes before a request is made, and
+-- take. It also clamps the row's date to the time of writing. So a write already under way finishes before a request is made, and
 -- is counted, previewed and erased with the rest; a write that comes after
 -- waits, then sees the open request and is refused.
 CREATE FUNCTION memory.cell_frozen_guard() RETURNS trigger
@@ -353,6 +353,12 @@ BEGIN
   IF memory.cell_open_erasure(NEW.namespace_id) IS NOT NULL THEN
     RAISE EXCEPTION 'this cell is waiting for whole-cell erasure; nothing new is written to it until that is decided'
       USING ERRCODE = '55000';
+  END IF;
+  -- No row is dated ahead of its writing. The backup reconcile erases what was
+  -- in a cell by its rows' dates, so a writer must not be able to date a row
+  -- past the erasure and have it kept.
+  IF NEW.created_at IS NULL OR NEW.created_at > now() THEN
+    NEW.created_at := now();
   END IF;
   RETURN NEW;
 END

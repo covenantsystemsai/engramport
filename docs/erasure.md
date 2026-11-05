@@ -149,7 +149,9 @@ completed one in the ledger (`engramport admin cell-erasure list`: the cell and
 when it completed), also run, as the database owner,
 `SELECT memory.reapply_cell_erasure($1::uuid, $2::timestamptz)` with the cell's
 id and that time. It erases again everything that was in the cell at that time,
-leaves what was written after, and is safe to run twice.
+leaves what was written after, and is safe to run twice. It can go by the rows'
+dates because the database dates every row written into a cell itself: a
+writer can't date one ahead of its writing.
 
 Supabase keeps daily backups for 7 days on the Pro plan, and single rows can't be
 removed from them. So erased text can remain in a backup for up to 7 days after

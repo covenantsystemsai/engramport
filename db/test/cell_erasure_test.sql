@@ -136,6 +136,18 @@ INSERT INTO memory.memory_links (namespace_id, from_memory_id, kind, to_memory_i
 -- A row dated in the future is still in the cell, and goes with it.
 INSERT INTO memory.entities (namespace_id, type, name, provenance_id, origin, created_at)
   VALUES (:'c2', 'person', 'Future Dated', :'m1_prov', 'asserted', now() + interval '1 year') RETURNING id AS e_future \gset
+SELECT t.expect_count('a row can''t be dated ahead of its writing',
+  format($$SELECT 1 FROM memory.entities WHERE id = %L AND created_at <= now()$$, :'e_future'), 1);
+SET ROLE engramport_app;
+BEGIN; SELECT t.as_key(:'k_c1', :'c1');
+  SELECT memory.remember('fact', 'cell erasure check: dated ahead', 'remember', 'rest') AS c1_mem \gset
+  SELECT provenance_id AS c1_prov FROM memory.memories WHERE id = :'c1_mem' \gset
+  INSERT INTO memory.entities (namespace_id, type, name, provenance_id, origin, created_at)
+    VALUES (:'c1', 'person', 'Dated ahead by an agent', :'c1_prov', 'asserted', now() + interval '10 years') RETURNING id AS e_agent \gset
+COMMIT;
+RESET ROLE;
+SELECT t.expect_count('not by an agent either',
+  format($$SELECT 1 FROM memory.entities WHERE id = %L AND created_at <= now()$$, :'e_agent'), 1);
 
 \echo '-- only the cell''s owner starts it'
 SELECT * FROM t.sign_in('er-c2@client.test') \gset o1_

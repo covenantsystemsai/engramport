@@ -63,6 +63,9 @@ const SAMPLES = {
     "email=alice@example.com&next",
     "<alice@example.com>",
     "Write to alice@example.com: she replies fast.",
+    "alice@example.com:customer",
+    "Email:alice@example.com:primary",
+    "Call +19195550199 after noon.",
   ],
   id_number: ["SSN 123-45-6789 on the form."],
   financial_number: [

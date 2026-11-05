@@ -146,6 +146,8 @@ export function linkCarriesToken(raw: string): boolean {
 const URL_IN_TEXT = /\bhttps?:\/\/[^\s<>"'`]+/gi;
 const EMAIL = /^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}$/;
 const PHONE = /(?:\+?1[\s.-]{0,2})?(?:\(\s{0,2}[2-9]\d{2}\s{0,2}\)\s{0,2}|\b[2-9]\d{2}[\s.-]{1,2})[2-9]\d{2}[\s.-]{1,2}\d{4}\b/;
+ // E.164 form of a US number, with no separators: +19195550199
+const PHONE_COMPACT = /\+1[2-9]\d{2}[2-9]\d{6}(?!\d)/;
 const SSN = /\b\d{3}-\d{2}-\d{4}\b/;
 const CARD_CANDIDATE = /\b\d(?:[ -]?\d){12,18}\b/g;
 // Named bank details only: an AWS account id, which the policy lets agents
@@ -257,10 +259,15 @@ function hasEmail(text: string): boolean {
     const local = trimEnds(text.slice(start, at), (ch) => ch === ".");
     const domain = trimEnds(text.slice(at + 1, end), (ch) => ch === "." || ch === "-");
     if (!local || !domain) continue;
-    const after = text.charCodeAt(at + 1 + domain.length);
-    const next = text.charCodeAt(at + 2 + domain.length);
-    // host:path, as in an SSH remote
-    if (after === 58 && !Number.isNaN(next) && next !== 32 && next !== 10) continue;
+    // An SSH remote is host:path with a slash in the path (git@github.com:org/repo).
+    // Anything else after a colon, like "x@y.com:primary", is still an address.
+    const afterAt = at + 1 + domain.length;
+    if (text.charCodeAt(afterAt) === 58) {
+      let pathEnd = afterAt + 1;
+      while (pathEnd < text.length && pathEnd - afterAt < 256 && !/\s/.test(text[pathEnd])) pathEnd += 1;
+      const path = text.slice(afterAt + 1, pathEnd);
+      if (path.includes("/") && !path.includes("@")) continue;
+    }
     if (EMAIL.test(`${local}@${domain}`)) return true;
   }
   return false;
@@ -285,7 +292,7 @@ export function scanText(text: string): NeverStoreRule | null {
     if (linkCarriesToken(url)) return "token_link";
   }
   if (hasEmail(text)) return "contact_detail";
-  if (PHONE.test(text)) return "contact_detail";
+  if (PHONE.test(text) || PHONE_COMPACT.test(text)) return "contact_detail";
   if (SSN.test(text)) return "id_number";
   if (ACCOUNT.test(text)) return "financial_number";
   for (const m of text.matchAll(IBAN_CANDIDATE)) {

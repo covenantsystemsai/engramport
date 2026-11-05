@@ -6,16 +6,42 @@ What EngramPort must never keep, wherever it keeps anything.
 Most of it is not enforced in code yet; "Enforcement" below says what is and
 what isn't. Until the founder approves this file, it is a draft.
 
-**Source.** The founder's answers for the Max pilot cell (issue 75 in the Max
-repository, Nov 3, section 3, "What never goes into shared memory"). This
-policy adds nothing to those answers. Where they don't settle a case, it is
-listed under "Open founder decisions" instead of being decided here.
+**Sources.** Two, both the founder's:
+
+- the answers for the Max pilot cell (issue 75 in the Max repository, Nov 3,
+  section 3, "What never goes into shared memory");
+- the founder's decisions on this draft's seven open questions, with two
+  corrections (pull request 63, Nov 5).
+
+This policy adds nothing to those two. A case neither settles is listed under
+"Open founder decisions" rather than decided here.
 
 **Numbering.** The founder named this decision D-07. Until now the register
 used D-07 for retiring the old Cloud Run backend and D-09 for this policy. As
 with D-04 on Nov 4, the founder's label stands: this policy is now D-07 and the
 old-backend decision is now D-09. `docs/production-readiness.md` and
 `docs/hosting.md` are updated to match.
+
+## What the policy covers
+
+**Shared memory**, also called institutional memory, is everything agents and
+people store and retrieve through EngramPort: memory text and metadata,
+embeddings, graph rows, provenance, approvals and their records. This policy is
+about shared memory and every copy of it: logs, caches, exports, S3 and
+backups.
+
+Two things are **not** shared memory, and each is allowed only as described:
+
+- **Sign-in and membership records.** EngramPort keeps the minimum email
+  identifier each member signs in with, only as sign-in and access control
+  need it. These records are kept in their own tables, apart from memories,
+  under D-02 and D-03's scope, access, retention, export and deletion
+  controls. They never appear in search, the graph, embeddings or agent memory
+  (founder decision 5).
+- **Managed credential storage.** AWS Secrets Manager holds the server's own
+  secrets. It is an explicitly authorized security service, not EngramPort
+  memory. The rule that memories never hold secrets does not mean the service
+  runs without secured credential storage (founder correction 2).
 
 ## The rule
 
@@ -29,7 +55,8 @@ itself.
 
 ## What is never stored
 
-From issue 75, section 3, in its order.
+From issue 75, section 3, in its order, with the founder's decisions of Nov 5
+added where they apply.
 
 ### 1. Secrets of any kind
 
@@ -46,6 +73,9 @@ These are secrets too, because each one works as a credential:
   carrying a token;
 - EngramPort's own API keys and OAuth tokens.
 
+Links that carry an access token or a signature are never copied into memory,
+even when they point to an allowed source (founder decisions 1 and 4).
+
 **What may be stored instead.** Where a secret lives and who manages it, never
 its value. The answers ask that a new agent can tell "where the code,
 infrastructure and secrets live, and which AWS accounts are off-limits". So a
@@ -61,25 +91,58 @@ account it belongs to, may be stored. Its value may not.
 - bank or card details;
 - the financial details of any party to a transaction.
 
-**What may be stored.** For the client's team, names and roles only: who owns
-the account, who handles which work, who is read-only. Never their contact
-details.
+The founder's decisions of Nov 5 add, for transactions:
 
-For transactions, the answers allow the property (named by its address), its
-type, its key dates and the tasks tied to it. "Open founder decisions" lists
-where this meets the home-address rule.
+- **No property address that is, or may be, someone's home.** A property is
+  named by an opaque transaction or property reference, with a link to the
+  authorized system that holds the address. An address that is demonstrably a
+  non-residential business location, and not anyone's home, may be stored when
+  it is needed and authorized (decision 1).
+- **No names of buyers, sellers or other parties to a transaction.** Names
+  needed to carry out a transaction stay in the client's authorized system of
+  record (decision 2).
+- **No transaction-level money,** including the client's own: commissions,
+  fee splits, payments and related amounts. Financial processing stays in the
+  authorized system of record (decision 3).
 
-### 3. Raw meeting transcripts
+**What may be stored.**
 
-Store the decision, who asked for it, the date, and a link to the meeting
-record. Never the full text of the meeting.
+- For the client's team: names and roles only, as issue 75 decided. Who owns
+  the account, who handles which work, who is read-only. Never their contact
+  details.
+- For a transaction: the opaque property or transaction reference, a
+  non-sensitive property type, key dates, tasks and their status, and
+  references to the authorized source system (decisions 1 and 2).
+- For money: workflow status, policy references and calculation-rule
+  identifiers. Never the figures (decision 3).
 
-### 4. Anything from another client's cell
+### 3. Raw meeting transcripts, and verbatim quotes
+
+Never the full text of a meeting, and never a verbatim quote from it (founder
+decision 4).
+
+Store instead:
+
+- the decision or requirement, paraphrased;
+- the date and the role of whoever asked for it;
+- a non-secret reference to the meeting record, never a link that carries an
+  access token.
+
+### 4. Anything from another client's cell, or another memory
 
 Another client's data never enters this cell. Namespace isolation already keeps
 other cells out of reach. This rule also covers an agent copying another
 client's data in by hand, for example from a session where it worked for that
 client.
+
+The same holds inside the Max pilot (founder decision 7):
+
+- Max the customer-facing app and Max's build agents use separately authorized
+  namespaces and separate credentials.
+- Neither reads the other's memory, and nothing is shared between them
+  automatically.
+- Promoting an approved, non-sensitive lesson from one to the other later
+  needs its own separately authorized process.
 
 ### 5. A stored approval is never an approval
 
@@ -135,9 +198,18 @@ never in the database.
 
 ### S3
 
-The Terraform state bucket is the only S3 bucket in the design. It holds
-infrastructure state, which names secrets but never holds their values. No
-memory content, key, export or log of requests goes to S3. The load balancer's
+The Terraform state bucket is the only S3 bucket in the design. No memory
+content, export or log of requests goes to S3.
+
+Terraform state can hold sensitive values, so this policy makes no promise
+that it never will (founder correction 1). The rules are:
+
+- don't write credentials into Terraform. The design names the server's
+  secrets in Terraform and leaves their values to Secrets Manager, set by a
+  person;
+- keep the state secured: the bucket is private, KMS-encrypted, versioned and
+  TLS-only (`deploy/terraform/bootstrap`);
+- treat any state that already exists as sensitive. The load balancer's
 access logs, which would land in S3 and record query strings that carry sign-in
 codes, are off (`docs/hosting.md`).
 
@@ -191,14 +263,16 @@ theirs.
 - Tool inputs are processed as described under "Temporary processing", and
   stored only if they pass this policy.
 - Tool answers never echo a secret back.
-- The `remember`, `upload` and `link` tools are where agents write. They are
-  where enforcement will sit.
+- Every tool that writes is a write path: `remember`, `upload`, `link`, and
+  the tools that revise, supersede or propose. Enforcement covers all of them,
+  not just the first three.
 
 ### AWS Secrets Manager
 
-The one place for the server's secrets: the database URL, the key pepper and
-the embed secret. They are set by a person and never copied into the
-repository, a chat, a ticket, a log or memory.
+An explicitly authorized security service, not EngramPort memory (founder
+correction 2). It is the one place for the server's own secrets: the database
+URL, the key pepper and the embed secret. They are set by a person and never
+copied into the repository, a chat, a ticket, a log or memory.
 
 ## Enforcement
 
@@ -213,15 +287,27 @@ repository, a chat, a ticket, a log or memory.
 The never-store list itself rests on the agents' instructions and the owner's
 review. Nothing in the server refuses a secret or a transcript yet.
 
-**Planned.** A per-cell write policy enforced by the server on `remember`,
-`upload` and `link` (build item 5 in `docs/spec-gap-analysis.md`):
+**Required before real customer memory** (founder decision 6). The Max cell
+stores no real customer memory until a write policy is enforced by the server.
+Offline testing with synthetic data only may go ahead before then. The
+enforcement must have:
 
-- refuse text matching known secret formats (API keys, tokens, private keys,
-  connection strings);
-- refuse a source kind of transcript, and an upload of a whole transcript;
-- state the cell's rules in the tool's answer, so agents see them.
+- **every write path covered,** server-side: memory text, metadata, source
+  references and graph rows, through every tool that writes;
+- **fail-closed configuration:** if the policy is missing or can't load, writes
+  are refused, not let through;
+- **sanitized logs and errors:** no rejected content in a log line or an error
+  message;
+- **negative tests** that show each kind of item is refused;
+- **its limits stated,** as below.
 
-Building it is its own decision and its own pull request.
+At the least it refuses text matching known secret formats (API keys, tokens,
+private keys, connection strings), a source kind of transcript and an upload of
+a whole transcript, and states the cell's rules in the tool's answer so agents
+see them (build item 5 in `docs/spec-gap-analysis.md`).
+
+Approving this policy does not approve that enforcement. Building it is its own
+decision and its own pull request, with its own review.
 
 **Limits, said plainly.** Personal details can't be recognised reliably by
 pattern. The write policy will lower the risk for secrets and transcripts. It
@@ -251,36 +337,31 @@ request.
 - The `/mcp` handler logs a whole error object when a request fails. A database
   error can include the values of the row it was writing, which could be memory
   text. That log line should carry the error class and request id only.
-- The write policy above is not built.
+- The write policy above is not built, so the Max cell can't hold real
+  customer memory yet.
 - `src/auth.ts` writes an OIDC token cache file for the old Cloud Run backend.
   The Postgres server doesn't use it, and it goes when that backend is retired
   (D-09).
 
+## Founder decisions on this draft
+
+The founder answered the first draft's seven open questions on Nov 5. Each is
+applied in the sections above.
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | A property address that is also a seller's home | Not stored. An opaque property or transaction reference and a link to the authorized system instead. A demonstrably non-residential business address may be stored when needed and authorized. No token-bearing or signed links |
+| 2 | Names of transaction parties | Not stored. Property reference, non-sensitive type, dates, tasks and status, and source references only. The client's internal team's names and roles stay allowed |
+| 3 | The client's own transaction figures | Not stored: commissions, fee splits, payments and related amounts. Workflow status, policy references and calculation-rule identifiers instead |
+| 4 | Quoting a meeting | Paraphrase only, no verbatim quotes. Source, date, the requester's role and a non-secret reference to the meeting |
+| 5 | Sign-in emails | The policy covers shared memory. Minimum email identifiers stay in separate sign-in and membership records under D-02 and D-03, never in search, the graph, embeddings or agent memory |
+| 6 | Enforce before the first write | Yes, before the Max cell stores real customer memory. Synthetic-only offline testing may go ahead. Policy approval alone doesn't qualify the enforcement |
+| 7 | App memory and build memory | Separate namespaces and credentials, no cross-access or automatic sharing. Promoting lessons later needs its own authorized process |
+
+The two corrections, on Terraform state and on AWS Secrets Manager, are applied
+under "S3" and "What the policy covers".
+
 ## Open founder decisions
 
-The answers don't settle these. Each is put as a question, with no answer
-assumed.
-
-1. **Property addresses.** Properties may be named by their address, but home
-   addresses of clients and their customers may not be stored. A residential
-   listing's address is often the seller's home. Is the property address
-   allowed as the property's name in every case?
-2. **Names of transaction parties.** Their financial details are never stored.
-   May their names be stored with a transaction, or only the property, its
-   dates and its tasks?
-3. **The client's own business figures.** "Financial details of any
-   transaction party" is clear for buyers and sellers. Does it also cover the
-   client's own figures, such as a commission or a fee split?
-4. **Quoting a meeting.** Raw transcripts are never stored. May a memory hold a
-   short verbatim quote of what was asked, or only a paraphrase with a link?
-5. **Sign-in records.** EngramPort's access records hold each member's Google
-   email address, which sign-in needs. That is access control, not shared
-   memory. Should section 3 of the answers be read as covering shared memory
-   only, with access records governed by D-02 and D-03?
-6. **Enforce before the first write?** Should the write policy be built and
-   turned on before the Max cell stores anything, or may the pilot start on
-   instructions and review alone?
-7. **App memory and build memory.** The answers keep Max the app's memory apart
-   from the build agents' project memory "unless DeVere decides they should
-   share". The never-store list applies to both either way. Is keeping them
-   apart the decision for the pilot?
+None from the seven questions. A case none of the decisions above settles will
+be listed here, as a question, rather than decided in this file.

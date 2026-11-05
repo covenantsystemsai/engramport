@@ -94,6 +94,9 @@ async function hostedAuth() {
   const accept = config.acceptPage
     ? (await import("./accept.js")).createAcceptRouter({ publicUrl: config.publicUrl, pepper, db: sharedPool(), identity })
     : undefined;
+  const grant = config.grantPage
+    ? (await import("./grant.js")).createGrantRouter({ publicUrl: config.publicUrl, pepper, db: sharedPool(), identity })
+    : undefined;
   return {
     authenticate,
     resourceMetadataUrl: resourceMetadataUrl(config.publicUrl),
@@ -110,6 +113,7 @@ async function hostedAuth() {
     ...(restore ? { restore } : {}),
     ...(cellErasure ? { cellErasure } : {}),
     ...(accept ? { accept } : {}),
+    ...(grant ? { grant } : {}),
   };
 }
 

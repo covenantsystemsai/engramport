@@ -46,7 +46,7 @@ Founder decision D-02, decided Nov 4:
 | Admin ledger: `engramport admin erasure list` | Built |
 | The owner's page to review and confirm: `/erase/<request id>` | Built, off unless `ENGRAMPORT_ERASURE_PAGE=true` |
 | Export by an owner: `/export` | Built, off unless `ENGRAMPORT_EXPORT_PAGE=true`; see Export below |
-| Delegated erase and export grants | Built: the database (`0024_data_grants.sql`) and the acceptance page (`/accept`), off unless `ENGRAMPORT_ACCEPT_PAGE=true`; the page where owners give them is next |
+| Delegated erase and export grants | Built: the database (`0024_data_grants.sql`) the acceptance page (`/accept`) and the grant page (`/grant`, by typed email, `0027_grant_by_email.sql`), each off unless its flag is set |
 | Whole-cell erasure with a cell-erasure-confirmer (D-02.1a) | Built: the database (`0026_cell_erasure.sql`), the admin commands `confirmer` and `cell-erasure`, the pages for starting and confirming (`/cell-erasure`), off unless `ENGRAMPORT_CELL_ERASURE_PAGE=true`, and accepting the role on `/accept`. See Whole-cell erasure below |
 | 30-day retraction restore window | Built: the database (`0025_retraction_restore.sql`), the admin ledger `engramport admin restore list`, and the page `/restore`, off unless `ENGRAMPORT_RESTORE_PAGE=true`. See Retraction and restoring below |
 
@@ -244,8 +244,20 @@ decline, and confirms. One decision per sign-in. The page is off unless
 `ENGRAMPORT_ACCEPT_PAGE=true`, which needs the Postgres store, OAuth set up and
 `<public URL>/accept/callback` in Supabase's redirect URLs; its tests are
 `test/accept-http.pg.test.ts`.
-The page where owners give grants is next; until then grants are given through
-the database function only, like approval delegation.
+Owners give grants on the grant page, `<public URL>/grant/<namespace id>`
+(founder decision D-02 Grant Recipient Selection, migration
+`0027_grant_by_email.sql`). The owner signs in, types the recipient's email,
+picks erase or export and 7, 30 or 90 days, and confirms. The page lists no
+members. `memory.offer_data_grant` writes the grant only when the address
+belongs to another enabled person with an active membership of the namespace,
+and returns the same nothing either way, so the page says the same thing either
+way and membership can't be learned from it. Its only refusals are about the
+request (the power, the end, the address's shape) and the owner's own sign-in
+and authority. The grant is undecided until the recipient accepts it on the
+acceptance page. The page is off unless `ENGRAMPORT_GRANT_PAGE=true`, which
+needs the Postgres store, OAuth set up and `<public URL>/grant/callback` in
+Supabase's redirect URLs; its tests are `db/test/grant_email_test.sql` and
+`test/grant-http.pg.test.ts`.
 
 ## Retraction and restoring
 

@@ -43,7 +43,7 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "prepublishOnly": "npm run build",
-    "test:store": "node --import tsx --test --test-concurrency=1 test/store.pg.test.ts test/embedding-models.pg.test.ts test/admin.pg.test.ts test/graph.pg.test.ts test/extract.pg.test.ts test/eval.pg.test.ts test/oauth.pg.test.ts test/oauth-http.pg.test.ts test/approve-http.pg.test.ts test/erase-http.pg.test.ts test/export-http.pg.test.ts test/restore-http.pg.test.ts test/cell-erasure-http.pg.test.ts test/accept-http.pg.test.ts"
+    "test:store": "node --import tsx --test --test-concurrency=1 test/store.pg.test.ts test/embedding-models.pg.test.ts test/admin.pg.test.ts test/graph.pg.test.ts test/extract.pg.test.ts test/eval.pg.test.ts test/oauth.pg.test.ts test/oauth-http.pg.test.ts test/approve-http.pg.test.ts test/erase-http.pg.test.ts test/export-http.pg.test.ts test/restore-http.pg.test.ts test/cell-erasure-http.pg.test.ts test/accept-http.pg.test.ts test/grant-http.pg.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

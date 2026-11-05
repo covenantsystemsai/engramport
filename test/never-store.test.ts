@@ -50,6 +50,8 @@ const SAMPLES = {
     "Signed in at https://app.example.com/callback#access_token=abc",
     "https://example.com/callback#refresh_token=opaque-value",
     "https://example.com/cb#state=1&sig=abc",
+    "https://example.com/#/callback?refresh_token=opaque-value",
+    "https://example.com/#/auth?state=1&code=abc",
   ],
   contact_detail: [
     "Reach the seller at jane.doe@example.com before Friday.",
@@ -108,8 +110,8 @@ test("ordinary memory text is let through", () => {
 test("a refusal names the field and the kind, never the text", () => {
   const secret = `${"gh"}p_${rep("a", 36)}`;
   const logged: string[] = [];
-  const orig = console.log;
-  console.log = (...a: unknown[]) => void logged.push(a.join(" "));
+  const orig = console.error;
+  console.error = (...a: unknown[]) => void logged.push(a.join(" "));
   try {
     assert.throws(
       () => enforceNeverStore({ text: [["content", `token ${secret}`]] }),
@@ -117,7 +119,7 @@ test("a refusal names the field and the kind, never the text", () => {
         !err.message.includes(secret) && /Nothing was stored/.test(err.message),
     );
   } finally {
-    console.log = orig;
+    console.error = orig;
   }
   assert.equal(logged.length, 1);
   assert.ok(!logged[0].includes(secret));
@@ -151,8 +153,8 @@ test("metadata takes only flat, named fields that aren't never-store fields", ()
   // A secret in a key is refused, and the key is never named in the answer or the log.
   const keySecret = `${"gh"}p_${"a".repeat(36)}`;
   const logged: string[] = [];
-  const orig = console.log;
-  console.log = (...a: unknown[]) => void logged.push(a.join(" "));
+  const orig = console.error;
+  console.error = (...a: unknown[]) => void logged.push(a.join(" "));
   try {
     for (const value of ["fine", "x@example.com"]) {
       assert.throws(() => enforceNeverStore({ metadata: { [keySecret]: value } }),
@@ -160,7 +162,7 @@ test("metadata takes only flat, named fields that aren't never-store fields", ()
           !e.message.includes(keySecret));
     }
   } finally {
-    console.log = orig;
+    console.error = orig;
   }
   assert.ok(logged.length === 2 && logged.every((l) => !l.includes(keySecret)));
   // "fee" is a key part; "feedback" isn't.
@@ -189,15 +191,15 @@ test("transcript files are refused by name", () => {
 });
 
 test("it fails closed: a check that breaks refuses the write", () => {
-  const orig = console.log;
-  console.log = () => {};
+  const orig = console.error;
+  console.error = () => {};
   try {
     assert.throws(
       () => enforceNeverStore({ text: [["content", "fine"]] }, () => { throw new Error("boom"); }),
       (e: unknown) => e instanceof NeverStoreRefusal && e.rule === "unavailable",
     );
   } finally {
-    console.log = orig;
+    console.error = orig;
   }
 });
 

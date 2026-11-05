@@ -106,6 +106,19 @@ const TOKEN_PARAMS = new Set([
   "googleaccessid", "se", "sv", "sp", "jwt", "otp", "magic", "invite",
 ]);
 
+/** Whether any name=value pair in a query or fragment uses a credential name. */
+function hasTokenParam(part: string): boolean {
+  return part.split(/[?&#;]/).some((pair) => {
+    const eq = pair.indexOf("=");
+    if (eq < 0) return false;
+    let name = pair.slice(0, eq);
+    try {
+      name = decodeURIComponent(name);
+    } catch { /* keep it as written */ }
+    return TOKEN_PARAMS.has(name.toLowerCase());
+  });
+}
+
 /** A link carries a token if it has a password in it or a token-bearing parameter. */
 export function linkCarriesToken(raw: string): boolean {
   let url: URL;
@@ -115,22 +128,16 @@ export function linkCarriesToken(raw: string): boolean {
     // Not parseable as a whole: read its parameter names by hand, so a broken
     // link is never a way past the check.
     const q = raw.search(/[?#]/);
-    if (q < 0) return false;
-    return raw.slice(q + 1).split(/[&#;]/).some((pair) => {
-      const name = pair.split("=")[0];
-      return TOKEN_PARAMS.has(name.toLowerCase());
-    });
+    return q >= 0 && hasTokenParam(raw.slice(q + 1));
   }
   if (url.password || url.username) return true;
   for (const name of url.searchParams.keys()) {
     if (TOKEN_PARAMS.has(name.toLowerCase())) return true;
   }
-  // Some sign-in and share links carry the token in the fragment: the same
+  // Some sign-in and share links carry the token in the fragment, bare
+  // ("#refresh_token=...") or after a route ("#/callback?code=..."): the same
   // names count there as in the query string.
-  for (const name of new URLSearchParams(url.hash.slice(1)).keys()) {
-    if (TOKEN_PARAMS.has(name.toLowerCase())) return true;
-  }
-  return false;
+  return hasTokenParam(url.hash.slice(1));
 }
 
 // The whole link up to whitespace or a quote, brackets included, with no
@@ -410,7 +417,10 @@ export function enforceNeverStore(fields: WriteFields, scan: TextScanner = scanT
   }
 }
 
-/** One line per refusal: which rule and field, never the text. */
+/**
+ * One line per refusal: which rule and field, never the text. On stderr,
+ * because in stdio mode stdout is the MCP protocol stream.
+ */
 function logRefusal(r: NeverStoreRefusal): void {
-  console.log(JSON.stringify({ event: "write_refused", policy: "never_store", rule: r.rule, field: r.field }));
+  console.error(JSON.stringify({ event: "write_refused", policy: "never_store", rule: r.rule, field: r.field }));
 }

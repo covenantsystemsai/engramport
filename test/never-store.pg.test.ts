@@ -113,6 +113,10 @@ describe("never-store policy on every write path", { skip: ADMIN_URL ? false : "
     await refused("remember", { content: "fine", dedup_key: secret }, /dedup_key looks like a secret/);
     await refused("remember", { content: "fine", metadata: { buyer_name: "x" } }, /metadata\.buyer_name/);
     await refused("remember", { content: "fine", metadata: { nested: { a: 1 } } }, /metadata\.nested/);
+    await refused("remember", { content: "fine", metadata: { reference: 4111111111111111 } }, /metadata\.reference has what looks like a card/);
+    await refused("remember", { content: "fine", metadata: { [secret]: "x" } }, /metadata\.<key> looks like a secret/);
+    await refused("remember", { content: "IBAN: GB82 WEST 1234 5698 7654 32" }, /content has what looks like a card, bank/);
+    await refused("remember", { content: "password: correcthorsebatterystaple" }, /content looks like a secret/);
     await refused("remember", { content: "fine", source_url: "https://x.example.com/f?token=abc" }, /source_url has a link/);
     await refused("remember", { content: "fine", source_url: "http://x.example.com/f" }, /source_url isn't a field/);
   });

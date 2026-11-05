@@ -36,6 +36,7 @@ const SAMPLES = {
     "The lockbox code is 4471.",
     "password: x7!kQ",
     "Front door code: 1234#",
+    "password: correcthorsebatterystaple",
     `Posts to https://hooks.${"slack"}.com/services/T0${"0".repeat(8)}/B0${"0".repeat(8)}/${"x".repeat(24)}.`,
   ],
   token_link: [
@@ -54,6 +55,8 @@ const SAMPLES = {
     "Card 4111 1111 1111 1111 on file.",
     "Routing number 021000021 for the wire.",
     "Bank account #12345678 at the credit union.",
+    "IBAN: GB82 WEST 1234 5698 7654 32",
+    "Wire to DE89370400440532013000 today.",
   ],
   transcript: [
     "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nHello",
@@ -73,6 +76,8 @@ const ALLOWED = [
   "Agenda:\n9:00 Kickoff: intro\n9:30 Review: open items\n10:00 Wrap-up: next steps",
   "Status: waiting on the founder since Nov 4. Owner: build agent.",
   "Clone with git@github.com:example/repo.git",
+  "The password is stored in the vault, never here.",
+  "Ticket AB12 CDEF GHIJ KLMN 0 is a made-up code, not an IBAN.",
   "Town ordinance 7-12 checked 2026-11-01; source https://example.gov/ordinances?chapter=7",
 ];
 
@@ -123,6 +128,27 @@ test("metadata takes only flat, named fields that aren't never-store fields", ()
   // A value is read as text too.
   assert.throws(() => enforceNeverStore({ metadata: { contact: "x@example.com" } }),
     (e: unknown) => e instanceof NeverStoreRefusal && e.rule === "contact_detail" && e.field === "metadata.contact");
+  // A number is read like text: a card number sent as a JSON number is refused.
+  assert.throws(() => enforceNeverStore({ metadata: { reference: 4111111111111111 } }),
+    (e: unknown) => e instanceof NeverStoreRefusal && e.rule === "financial_number" && e.field === "metadata.reference");
+  assert.throws(() => enforceNeverStore({ metadata: { refs: [1, 4111111111111111] } }),
+    (e: unknown) => e instanceof NeverStoreRefusal && e.rule === "financial_number");
+  enforceNeverStore({ metadata: { count: 42, ratio: 0.5, year: 2026 } });
+  // A secret in a key is refused, and the key is never named in the answer or the log.
+  const keySecret = `${"gh"}p_${"a".repeat(36)}`;
+  const logged: string[] = [];
+  const orig = console.log;
+  console.log = (...a: unknown[]) => void logged.push(a.join(" "));
+  try {
+    for (const value of ["fine", "x@example.com"]) {
+      assert.throws(() => enforceNeverStore({ metadata: { [keySecret]: value } }),
+        (e: unknown) => e instanceof NeverStoreRefusal && e.rule === "secret" && e.field === "metadata.<key>" &&
+          !e.message.includes(keySecret));
+    }
+  } finally {
+    console.log = orig;
+  }
+  assert.ok(logged.length === 2 && logged.every((l) => !l.includes(keySecret)));
   // "fee" is a key part; "feedback" isn't.
   enforceNeverStore({ metadata: { feedback: "fine" } });
 });

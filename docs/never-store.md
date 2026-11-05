@@ -298,11 +298,13 @@ on every write path before anything is stored: `remember`, `supersede_memory`,
   door, gate, alarm or lockbox code;
 - links that carry a token or a signature, in text or as `source_url`;
 - email addresses, US phone numbers, social security numbers, card numbers
-  that pass the Luhn check, and bank, routing and IBAN numbers named as such;
+  that pass the Luhn check, IBANs that pass their check digits, and bank and
+  routing numbers named as such;
 - transcripts: subtitle formats, transcript file names, and three or more
   lines with a timestamp or a speaker label;
 - structured fields (follow-on decision 9): metadata is flat, with lower-case
-  keys, short values and no key that names a never-store field (such as
+  keys checked like text, numbers read like text, short values and no key
+  that names a never-store field (such as
   `email`, `address`, `buyer`, `seller`, `commission`, `fee`, `password`); a
   `source_url` must be plain https; entity types and relation predicates were
   already limited to lower-case names.

@@ -90,8 +90,11 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bbearer\s{1,3}[A-Za-z0-9._~+/-]{20,}/i,
   // A URL with a password in it: scheme://user:password@host
   /\b[a-z][a-z0-9+.-]{1,20}:\/\/[^\s:/@]{1,256}:[^\s@/]{1,256}@/i,
-  // "password: x7!k", "door code is 4471": a statement of a secret's value
-  /\b(?:password|passwd|passphrase|passcode|pin\s{0,3}code|door\s{0,3}code|gate\s{0,3}code|alarm\s{0,3}code|lockbox\s{0,3}code|access\s{0,3}code|combination)\s{0,3}(?:[:=]|\bis\b)\s{0,3}["'`]?[^\s"'`]{0,40}[0-9!@#$%^&*][^\s"'`]{0,40}/i,
+  // "password: x7!kQ", "door code is 4471". An assignment (colon or equals)
+  // counts whatever the value; with "is", the value must have a digit or a
+  // symbol, so "the password is stored in the vault" reads as prose.
+  /\b(?:password|passwd|passphrase|passcode|pin\s{0,3}code|door\s{0,3}code|gate\s{0,3}code|alarm\s{0,3}code|lockbox\s{0,3}code|access\s{0,3}code|combination)\s{0,3}[:=]\s{0,3}["'`]?[^\s"'`]{4,}/i,
+  /\b(?:password|passwd|passphrase|passcode|pin\s{0,3}code|door\s{0,3}code|gate\s{0,3}code|alarm\s{0,3}code|lockbox\s{0,3}code|access\s{0,3}code|combination)\s{0,3}\bis\b\s{0,3}["'`]?[^\s"'`]{0,40}[0-9!@#$%^&*][^\s"'`]{0,40}/i,
 ];
 
 /** Query parameters that make a link a credential by itself. */
@@ -126,6 +129,23 @@ const SSN = /\b\d{3}-\d{2}-\d{4}\b/;
 const CARD_CANDIDATE = /\b\d(?:[ -]?\d){12,18}\b/g;
 // Named bank details only: an AWS account id, which the policy lets agents
 // store as a location, is not a bank account.
+// An IBAN: two letters, two check digits, then 11 to 30 letters or digits,
+// confirmed by its mod-97 check so ordinary codes don't match.
+const IBAN_CANDIDATE = /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}\b/g;
+
+function ibanValid(raw: string): boolean {
+  const s = raw.replace(/ /g, "");
+  if (s.length < 15 || s.length > 34) return false;
+  const moved = s.slice(4) + s.slice(0, 4);
+  let rem = 0;
+  for (const ch of moved) {
+    const c = ch.charCodeAt(0);
+    const v = c >= 65 ? String(c - 55) : ch;
+    for (const d of v) rem = (rem * 10 + (d.charCodeAt(0) - 48)) % 97;
+  }
+  return rem === 1;
+}
+
 const ACCOUNT = /\b(?:routing|aba|iban|(?:bank|checking|savings)\s{1,3}(?:account|acct))\s{0,3}(?:number|no\.?|#)?\s{0,3}[:#]?\s{0,3}[0-9][0-9 -]{5,30}[0-9]\b/i;
 
 function luhn(digits: string): boolean {
@@ -206,6 +226,9 @@ export function scanText(text: string): NeverStoreRule | null {
   if (PHONE.test(text)) return "contact_detail";
   if (SSN.test(text)) return "id_number";
   if (ACCOUNT.test(text)) return "financial_number";
+  for (const m of text.matchAll(IBAN_CANDIDATE)) {
+    if (ibanValid(m[0])) return "financial_number";
+  }
   for (const m of text.matchAll(CARD_CANDIDATE)) {
     const digits = m[0].replace(/[ -]/g, "");
     if (digits.length >= 13 && digits.length <= 19 && luhn(digits)) return "financial_number";
@@ -249,12 +272,22 @@ function metadataFields(metadata: unknown): Field[] {
   if (entries.length > META_MAX_KEYS) throw new NeverStoreRefusal("field", "metadata");
   const out: Field[] = [];
   for (const [key, value] of entries) {
-    const path = `metadata.${META_KEY.test(key) ? key : "<key>"}`;
-    if (!META_KEY.test(key) || deniedKey(key)) throw new NeverStoreRefusal("field", path);
+    // A key is checked like text before it is named anywhere, so a refusal or
+    // a log line never repeats a secret that was put in a key.
+    if (!META_KEY.test(key)) throw new NeverStoreRefusal("field", "metadata.<key>");
+    const keyRule = scanText(key);
+    if (keyRule) throw new NeverStoreRefusal(keyRule, "metadata.<key>");
+    const path = `metadata.${key}`;
+    if (deniedKey(key)) throw new NeverStoreRefusal("field", path);
     const values = Array.isArray(value) ? value : [value];
     if (Array.isArray(value) && value.length > META_MAX_ARRAY) throw new NeverStoreRefusal("field", path);
     for (const v of values) {
-      if (v === null || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v))) continue;
+      if (v === null || typeof v === "boolean") continue;
+      if (typeof v === "number" && Number.isFinite(v)) {
+        // A card or account number sent as a JSON number is read like text.
+        out.push([path, Number.isInteger(v) ? BigInt(v).toString() : String(v)]);
+        continue;
+      }
       if (typeof v === "string" && v.length <= META_MAX_STRING) {
         out.push([path, v]);
         continue;

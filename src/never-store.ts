@@ -92,10 +92,11 @@ const SECRET_PATTERNS: RegExp[] = [
   // A URL with a password in it: scheme://user:password@host
   // (the user name may be empty, as in redis://:password@host)
   /\b[a-z][a-z0-9+.-]{1,20}:\/\/[^\s:/@]{0,256}:[^\s@/]{1,256}@/i,
-  // "password: x7!kQ", "door code is 4471". An assignment (colon or equals)
+  // "password: x7!kQ", '"password": "hunter2"', "door code is 4471". An assignment (colon or equals)
   // counts whatever the value; with "is", the value must have a digit or a
   // symbol, so "the password is stored in the vault" reads as prose.
-  /\b(?:password|passwd|passphrase|passcode|pin\s{0,3}code|door\s{0,3}code|gate\s{0,3}code|alarm\s{0,3}code|lockbox\s{0,3}code|access\s{0,3}code|combination)\s{0,3}[:=]\s{0,3}["'`]?[^\s"'`]{4,}/i,
+  // The name may be quoted (JSON, YAML) or carry a prefix (db_password, DB-PASSWORD).
+  /(?<![A-Za-z0-9])(?:password|passwd|passphrase|passcode|pin\s{0,3}code|door\s{0,3}code|gate\s{0,3}code|alarm\s{0,3}code|lockbox\s{0,3}code|access\s{0,3}code|combination|api[_-]?key|client[_-]?secret|secret[_-]?key|private[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token)["'`]?\s{0,3}[:=]\s{0,3}["'`]?[^\s"'`]{4,}/i,
   /\b(?:password|passwd|passphrase|passcode|pin\s{0,3}code|door\s{0,3}code|gate\s{0,3}code|alarm\s{0,3}code|lockbox\s{0,3}code|access\s{0,3}code|combination)\s{0,3}\bis\b\s{0,3}["'`]?[^\s"'`]{0,40}[0-9!@#$%^&*][^\s"'`]{0,40}/i,
 ];
 

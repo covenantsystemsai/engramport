@@ -16,6 +16,13 @@ import { allToolDefinitions } from "../src/tools/index.ts";
 const rep = (c: string, n: number) => c.repeat(n);
 const SAMPLES = {
   secret: [
+    '{"password": "hunter2"}',
+    "db_password=hunter22",
+    "DB_PASSWORD: 'hunter2'",
+    `{"api_${"key"}": "${rep("x", 12)}"}`,
+    "client_secret = abcdefgh",
+    // A named credential in a link is caught as a secret before it is read as a link.
+    "https://example.com/callback#refresh_token=opaque-value",
     `-----BEGIN ${"RSA "}PRIVATE KEY-----\nMIIB`,
     `ep_live_${rep("A", 22)}.${rep("b", 43)}`,
     `ep${"a"}_${rep("c", 43)}`,
@@ -49,9 +56,9 @@ const SAMPLES = {
     `Long link https://example.com/${rep("a", 5000)}?sig=abc`,
     "Broken https://exa mple.com is not one link but https://[bad?token=abc is checked anyway",
     "Signed in at https://app.example.com/callback#access_token=abc",
-    "https://example.com/callback#refresh_token=opaque-value",
+    "https://example.com/callback#id_token=opaque-value",
     "https://example.com/cb#state=1&sig=abc",
-    "https://example.com/#/callback?refresh_token=opaque-value",
+    "https://example.com/#/callback?id_token=opaque-value",
     "https://example.com/#/auth?state=1&code=abc",
   ],
   contact_detail: [

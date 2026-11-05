@@ -36,6 +36,7 @@ const SAMPLES = {
     "The lockbox code is 4471.",
     "password: x7!kQ",
     "Front door code: 1234#",
+    `Posts to https://hooks.${"slack"}.com/services/T0${"0".repeat(8)}/B0${"0".repeat(8)}/${"x".repeat(24)}.`,
   ],
   token_link: [
     "See https://drive.example.com/file/d/abc?token=deadbeef",
@@ -168,6 +169,8 @@ test("long hostile inputs are checked quickly", () => {
     rep("password is ", 2000),
     rep("[00:01] x", 3000),
     `${rep("x", 19990)}@example.com`,
+    `https://example.com/${rep("!", 2000)}x`,
+    rep("!", 300) + "@" + rep("!", 19),
   ];
   for (const s of inputs) {
     const t = performance.now();

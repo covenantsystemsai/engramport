@@ -78,7 +78,6 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bgithub_pat_[A-Za-z0-9_]{20,}/,
   /\bglpat-[A-Za-z0-9_-]{20,}/, // GitLab
   /\bxox[abposr]-[A-Za-z0-9-]{10,}/, // Slack tokens
-  /\bhooks\.slack\.com\/services\/[A-Za-z0-9/]{10,}/,
   /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}/, // OpenAI, Anthropic
   /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/, // Stripe secret and restricted keys
   /\bwhsec_[A-Za-z0-9]{16,}/,
@@ -167,14 +166,41 @@ function looksLikeTranscript(text: string): boolean {
 }
 
 /** The first never-store item found in one piece of text, or null. */
+/** A webhook URL that posts by itself, with no other credential. */
+function isWebhook(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return url.hostname === "hooks.slack.com" && url.pathname.startsWith("/services/");
+  } catch {
+    return false;
+  }
+}
+
+const isAlnum = (c: number) => (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+const TRAILING_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?"]);
+
+/** Strips characters from both ends while `junk` says so, in one pass each way. */
+function trimEnds(s: string, junk: (ch: string) => boolean): string {
+  let start = 0;
+  let end = s.length;
+  while (start < end && junk(s[start])) start += 1;
+  while (end > start && junk(s[end - 1])) end -= 1;
+  return s.slice(start, end);
+}
+
 export function scanText(text: string): NeverStoreRule | null {
   for (const p of SECRET_PATTERNS) if (p.test(text)) return "secret";
   for (const m of text.matchAll(URL_IN_TEXT)) {
-    if (linkCarriesToken(m[0].replace(/[.,;:!?]+$/, ""))) return "token_link";
+    let end = m[0].length;
+    while (end > 0 && TRAILING_PUNCTUATION.has(m[0][end - 1])) end -= 1;
+    const url = m[0].slice(0, end);
+    if (isWebhook(url)) return "secret";
+    if (linkCarriesToken(url)) return "token_link";
   }
   for (const word of text.split(/[\s,;<>()[\]{}"'`]+/)) {
     if (word.length > 320 || !word.includes("@")) continue;
-    const trimmed = word.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "").replace(/^mailto:/i, "");
+    let trimmed = trimEnds(word, (ch) => !isAlnum(ch.charCodeAt(0)));
+    if (trimmed.toLowerCase().startsWith("mailto:")) trimmed = trimmed.slice(7);
     if (EMAIL.test(trimmed)) return "contact_detail";
   }
   if (PHONE.test(text)) return "contact_detail";

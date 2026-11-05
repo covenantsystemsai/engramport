@@ -48,12 +48,18 @@ const SAMPLES = {
     `Long link https://example.com/${rep("a", 5000)}?sig=abc`,
     "Broken https://exa mple.com is not one link but https://[bad?token=abc is checked anyway",
     "Signed in at https://app.example.com/callback#access_token=abc",
+    "https://example.com/callback#refresh_token=opaque-value",
+    "https://example.com/cb#state=1&sig=abc",
   ],
   contact_detail: [
     "Reach the seller at jane.doe@example.com before Friday.",
     "Call (252) 555-0143 about the listing.",
     "Their cell is 919.555.0199.",
     "mailto:owner@example.org",
+    "Email:alice@example.com",
+    "email=alice@example.com&next",
+    "<alice@example.com>",
+    "Write to alice@example.com: she replies fast.",
   ],
   id_number: ["SSN 123-45-6789 on the form."],
   financial_number: [

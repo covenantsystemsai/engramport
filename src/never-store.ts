@@ -118,15 +118,18 @@ export function linkCarriesToken(raw: string): boolean {
     if (q < 0) return false;
     return raw.slice(q + 1).split(/[&#;]/).some((pair) => {
       const name = pair.split("=")[0];
-      return TOKEN_PARAMS.has(name.toLowerCase()) || /^(?:access_token|id_token)$/i.test(name);
+      return TOKEN_PARAMS.has(name.toLowerCase());
     });
   }
   if (url.password || url.username) return true;
   for (const name of url.searchParams.keys()) {
     if (TOKEN_PARAMS.has(name.toLowerCase())) return true;
   }
-  // Some sign-in and share links carry the token in the fragment.
-  if (/(?:^|[#&])(?:access_token|id_token|token|code)=/i.test(url.hash)) return true;
+  // Some sign-in and share links carry the token in the fragment: the same
+  // names count there as in the query string.
+  for (const name of new URLSearchParams(url.hash.slice(1)).keys()) {
+    if (TOKEN_PARAMS.has(name.toLowerCase())) return true;
+  }
   return false;
 }
 
@@ -209,6 +212,34 @@ function isWebhook(raw: string): boolean {
 const isAlnum = (c: number) => (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
 const TRAILING_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?"]);
 
+const isLocalChar = (c: number) => isAlnum(c) || c === 46 || c === 95 || c === 37 || c === 43 || c === 45; // . _ % + -
+const isDomainChar = (c: number) => isAlnum(c) || c === 46 || c === 45; // . -
+
+/**
+ * Whether the text holds an email address, wherever it sits: after a label
+ * ("Email:x@y.com", "email=x@y.com"), in brackets or mid-sentence. Each "@"
+ * is read at most 64 characters back and 253 forward, so the scan stays
+ * linear. "git@github.com:org/repo" (an SSH remote, a host followed by a
+ * colon and a path) is not an address.
+ */
+function hasEmail(text: string): boolean {
+  for (let at = text.indexOf("@"); at >= 0; at = text.indexOf("@", at + 1)) {
+    let start = at;
+    while (start > 0 && at - start < 64 && isLocalChar(text.charCodeAt(start - 1))) start -= 1;
+    let end = at + 1;
+    while (end < text.length && end - at <= 253 && isDomainChar(text.charCodeAt(end))) end += 1;
+    const local = trimEnds(text.slice(start, at), (ch) => ch === ".");
+    const domain = trimEnds(text.slice(at + 1, end), (ch) => ch === "." || ch === "-");
+    if (!local || !domain) continue;
+    const after = text.charCodeAt(at + 1 + domain.length);
+    const next = text.charCodeAt(at + 2 + domain.length);
+    // host:path, as in an SSH remote
+    if (after === 58 && !Number.isNaN(next) && next !== 32 && next !== 10) continue;
+    if (EMAIL.test(`${local}@${domain}`)) return true;
+  }
+  return false;
+}
+
 /** Strips characters from both ends while `junk` says so, in one pass each way. */
 function trimEnds(s: string, junk: (ch: string) => boolean): string {
   let start = 0;
@@ -227,12 +258,7 @@ export function scanText(text: string): NeverStoreRule | null {
     if (isWebhook(url)) return "secret";
     if (linkCarriesToken(url)) return "token_link";
   }
-  for (const word of text.split(/[\s,;<>()[\]{}"'`]+/)) {
-    if (word.length > 320 || !word.includes("@")) continue;
-    let trimmed = trimEnds(word, (ch) => !isAlnum(ch.charCodeAt(0)));
-    if (trimmed.toLowerCase().startsWith("mailto:")) trimmed = trimmed.slice(7);
-    if (EMAIL.test(trimmed)) return "contact_detail";
-  }
+  if (hasEmail(text)) return "contact_detail";
   if (PHONE.test(text)) return "contact_detail";
   if (SSN.test(text)) return "id_number";
   if (ACCOUNT.test(text)) return "financial_number";

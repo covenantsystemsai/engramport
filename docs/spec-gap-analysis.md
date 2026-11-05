@@ -439,6 +439,8 @@ The pilot cell's owner set what it should hold, on 2026-11-03.
 
 **Never stored:** secrets, clients' personal details, raw transcripts, and any other client's data.
 
+The full policy, with the founder's decisions of Nov 5, is `docs/never-store.md` (D-07). Where this section and that file differ, that file stands.
+
 Isolation already keeps other cells' data out of reach. But nothing stops an agent with this cell's key from writing any of these into it. So the plan adds a per-cell write policy (build item 5), enforced by the server on `remember`, `upload` and `link`:
 
 - refuse text that matches known secret formats: API keys, tokens, private keys and connection strings

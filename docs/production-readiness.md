@@ -140,9 +140,9 @@ is a starting point for that conversation, not an assumption anything is built o
 | D-04 | Revising an approved memory | Decided Nov 4: an agent's revision is a proposal; the approved version stays current until a person approves the proposal, which then replaces it atomically. See `docs/approvals.md` | Gate 2 trust layer |
 | D-05 | Permission to author deploy files and a setup script (files only) | Decided Nov 5: deployment configuration, environment templates, infrastructure definitions, an installation and verification guide, and a Max setup script with dry run, as files only, locally validated and independently reviewed. No deployment, provisioning, live migration, credential provisioning, customer-data access, Max activation or public access | Gate 3 preparation |
 | D-06 | Where the HTTP server runs | Decided Nov 5: Amazon ECS on Fargate behind an Application Load Balancer in us-east-1, with the existing Supabase project and AWS Secrets Manager. See `docs/hosting.md` | Gate 3 |
-| D-07 | The old Cloud Run backend | Require authentication on it, then retire it once the Postgres store is live | Gate 3 |
+| D-07 | Never-store policy (what must never be stored); numbered D-04 until Nov 4 and D-09 until Nov 5 | Nov 5: the founder approved drafting it from the Max pilot answers, as policy text only, then decided its seven open questions (no home addresses, transaction-party names or transaction figures; paraphrase, no quotes; sign-in emails kept apart from memory; server-side enforcement before real customer memory; separate app and build-agent memory). Draft in `docs/never-store.md`; enforcement is a separate step. Not approved yet | Gate 3 |
 | D-08 | npm releases | No release until Gate 3 passes; then a major version whose default store is Postgres | Gate 4 |
-| D-09 | Memory write policy (what must never be stored); numbered D-04 until Nov 4 | Write the founder's never-store list as policy text first, enforce it later. Not approved yet | Gate 3 |
+| D-09 | The old Cloud Run backend; numbered D-07 until Nov 5 | Require authentication on it, then retire it once the Postgres store is live | Gate 3 |
 
 ## 5. Dependency-ordered backlog
 
@@ -218,7 +218,7 @@ None of these has been done. They are listed in order so each can be asked for s
 3. Deploy the embedding Edge Function and set its secret.
 4. Deploy the HTTP server (after D-06).
 5. Connect one client and run the pilot checks with non-sensitive data.
-6. Require authentication on the old Cloud Run service (D-07).
+6. Require authentication on the old Cloud Run service (D-09).
 7. Turn on branch protection for `main`.
 8. Publish to npm (D-08).
 

@@ -271,8 +271,8 @@ on is one reviewed change.
 Each is its own step, and each needs the founder's yes. Building the deploy
 files completes none of them.
 
-1. **Never-store policy (D-09)** written and approved, so what Max must never
-   store is a written rule before anything is stored.
+1. **Never-store policy (D-07)** approved (draft: `docs/never-store.md`), so
+   what Max must never store is a written rule before anything is stored.
 2. **Migrations.** The remaining migrations (0002 to 0027) reviewed and
    applied to `engramport-memory`, with Supabase's security and performance
    advisors clean afterwards.
@@ -289,7 +289,7 @@ files completes none of them.
    Claude, ChatGPT, Codex and an AN2X agent, each reading and writing only its
    own namespace; each page tried once on a test namespace.
 9. **The old backend.** Authentication required on the old eidetic-v3 service
-   (D-07), so nothing reaches the old store.
+   (D-09), so nothing reaches the old store.
 10. **Repository.** Branch protection on `main`.
 11. **Max.** The Max city and cell created and keys minted by the setup
     script, run in dry-run first, then for real, on its own yes.

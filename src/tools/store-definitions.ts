@@ -150,7 +150,8 @@ export const storeOverrides: Record<string, ToolDefinition> = {
     description:
       "Retract one memory in your key's own namespace. It stops coming back from recall and from the memories " +
       "get_entity lists. The text is kept for the record and still shows, as retracted, to fetch_memory. This is " +
-      "not erasure: use it for something stored in error. To remove data someone asked to have deleted, use " +
+      "not erasure: use it for something stored in error. A person with authority over the namespace can restore " +
+      "it within 30 days; after that the retraction is final. To remove data someone asked to have deleted, use " +
       "request_erasure, which a person then decides. A " +
       "memory a person approved can't be retracted this way; a proposed revision you no longer want can be withdrawn.",
     inputSchema: {

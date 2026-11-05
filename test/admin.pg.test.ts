@@ -560,6 +560,51 @@ describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABA
     assert.ok(out.some((l) => l.includes(id) && l.includes("3 memories") && l.includes("1 links")));
   });
 
+  test("the restoration ledger shows who restored which memory, never the text, and the admin can't restore", async () => {
+    const k = await admin.mintKey({ namespace: cell, actor: `claude-${run}` });
+    const m = await store.remember(k.key, { content: `Restoration ledger check ${run}: a private note` });
+    await store.retract(k.key, m.id);
+    const ns = (await superPool.query<{ id: string }>("SELECT id FROM memory.namespaces WHERE path = $1", [cell])).rows[0].id;
+    const person = (await superPool.query<{ id: string }>(
+      "INSERT INTO memory.actors (kind, slug, display_name) VALUES ('human', $1, $1) RETURNING id", [`restorer-${run}`])).rows[0].id;
+    const authority = (await superPool.query<{ id: string }>(
+      "INSERT INTO memory.approval_authorities (actor_id, namespace_id, scope) VALUES ($1, $2, 'cell_knowledge') RETURNING id",
+      [person, ns])).rows[0].id;
+    const at = (await superPool.query<{ retracted_at: Date }>(
+      "SELECT retracted_at FROM memory.memories WHERE id = $1", [m.id])).rows[0].retracted_at;
+    const challenge = (await superPool.query<{ id: string }>(
+      `INSERT INTO memory.restore_challenges (memory_id, namespace_id, actor_id, authority_id, retracted_at, secret_sha256,
+         sign_in_hash, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now() + interval '10 minutes') RETURNING id`,
+      [m.id, ns, person, authority, at, randomBytes(32), randomBytes(32)])).rows[0].id;
+    const id = (await superPool.query<{ id: string }>(
+      `INSERT INTO memory.restorations (memory_id, namespace_id, restored_by_actor_id, authority_id, challenge_id,
+         retracted_at, restored_to)
+       VALUES ($1, $2, $3, $4, $5, $6, 'active') RETURNING id`, [m.id, ns, person, authority, challenge, at])).rows[0].id;
+    const rows = await admin.listRestorations({ namespace: city, sinceMs: 3_600_000 });
+    const mine = rows.find((r) => r.id === id)!;
+    assert.deepEqual([mine.namespace, mine.memory_id, mine.restored_by, mine.authority_id, mine.restored_to],
+      [cell, m.id, `restorer-${run}`, authority, "active"]);
+    assert.ok(!JSON.stringify(rows).includes("private note"), "no text in the ledger");
+    await refused(admin.listRestorations({ limit: 0 }), /limit/);
+    const out: string[] = [];
+    const io = { out: (l: string) => out.push(l), err: () => undefined };
+    const open = () => new AdminClient(new pg.Pool({ connectionString: urlAs(opsRole, "ops-test-only") }), pepper);
+    assert.equal(await runAdmin(["restore", "list", "--namespace", cell], open, io), 0);
+    assert.ok(out.some((l) => l.includes(id) && l.includes("back to active") && l.includes(`restorer-${run}`)));
+    const ops = new pg.Client({ connectionString: urlAs(opsRole, "ops-test-only") });
+    await ops.connect();
+    try {
+      await ops.query("SET ROLE engramport_admin");
+      await assert.rejects(ops.query("SELECT secret_sha256 FROM memory.restore_challenges"), /permission denied/);
+      await assert.rejects(ops.query(
+        "SELECT memory.decide_restore_challenge(gen_random_uuid(), gen_random_uuid(), $1, $2)",
+        [challenge, "0".repeat(64)]), /permission denied/);
+    } finally {
+      await ops.end();
+    }
+  });
+
   test("the admin sees delegated grants and can revoke one, and nothing more", async () => {
     const ns = (await superPool.query<{ id: string }>("SELECT id FROM memory.namespaces WHERE path = $1", [cell])).rows[0].id;
     const human = async (slug: string) => (await superPool.query<{ id: string }>(

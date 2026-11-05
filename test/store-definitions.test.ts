@@ -52,6 +52,7 @@ describe("Postgres store tool definitions", () => {
     const del = byName.get("delete_memory")!.description;
     assert.match(del, /^Retract/);
     assert.match(del, /kept for the record/);
+    assert.match(del, /restore it within 30 days/);
     assert.doesNotMatch(del, /vector and its graph edges go with it/);
     const rem = byName.get("remember")!.description;
     assert.match(rem, /superseded/);

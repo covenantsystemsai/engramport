@@ -8,6 +8,7 @@
  * link, unlink and get_entity were written for this store and are shared.
  */
 
+import { NEVER_STORE_RULES } from "../never-store.js";
 import { CLAIM_TYPES, MEMORY_KINDS } from "../store/postgres.js";
 
 type ToolDefinition = { name: string; description: string; inputSchema: { type: "object"; properties: Record<string, unknown>; required: string[] } };
@@ -172,7 +173,14 @@ export const storeOverrides: Record<string, ToolDefinition> = {
   },
 };
 
+/** The tools that write to shared memory: each states the never-store rules (D-07). */
+export const WRITE_TOOLS = new Set(["remember", "upload", "link", "supersede_memory"]);
+
 /** The definitions to serve with the Postgres store: these overrides in place, unavailable tools left out. */
-export function forPostgresStore<T extends { name: string }>(defs: readonly T[]): Array<T | ToolDefinition> {
-  return defs.filter((d) => !NOT_ON_POSTGRES.has(d.name)).map((d) => storeOverrides[d.name] ?? d);
+export function forPostgresStore<T extends { name: string; description?: string }>(defs: readonly T[]): Array<T | ToolDefinition> {
+  return defs.filter((d) => !NOT_ON_POSTGRES.has(d.name)).map((d) => {
+    const def = (storeOverrides[d.name] ?? d) as T | ToolDefinition;
+    if (!WRITE_TOOLS.has(d.name)) return def;
+    return { ...def, description: `${def.description ?? ""} ${NEVER_STORE_RULES}`.trim() };
+  });
 }

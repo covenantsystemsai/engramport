@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 import pg from "pg";
 
 import { currentRequestId } from "../caller.js";
+import { enforceNeverStore, NeverStoreRefusal, type WriteFields } from "../never-store.js";
 import { chunkText } from "../chunk.js";
 import { Embedder, vectorLiteral } from "../embeddings.js";
 import { hashKey, parseKey } from "../keys.js";
@@ -37,13 +38,26 @@ export type Transport = "stdio" | "streamable_http" | "rest" | "job";
 export type RecallMode = "hybrid" | "vector" | "keyword" | "graph";
 export const RECALL_MODES: readonly RecallMode[] = ["hybrid", "vector", "keyword", "graph"];
 
-export type StoreErrorCode = "unauthorized" | "forbidden" | "not_found" | "invalid" | "conflict";
+export type StoreErrorCode = "unauthorized" | "forbidden" | "not_found" | "invalid" | "conflict" | "refused";
 
 /** An error that is safe to show the caller. Anything else is reported as a generic store error. */
 export class StoreError extends Error {
   constructor(readonly code: StoreErrorCode, message: string) {
     super(message);
     this.name = "StoreError";
+  }
+}
+
+/**
+ * The never-store policy (D-07) on one write, before anything is stored. A
+ * refusal becomes a StoreError with code "refused", whose message names the
+ * field and the kind of item but never repeats the text.
+ */
+export function guardWrite(fields: WriteFields): void {
+  try {
+    enforceNeverStore(fields);
+  } catch (err) {
+    throw new StoreError("refused", err instanceof NeverStoreRefusal ? err.message : "Refused by the never-store policy.");
   }
 }
 
@@ -507,6 +521,11 @@ export class PostgresStore {
    */
   async remember(rawKey: string, input: RememberInput) {
     const content = checkContent(input.content);
+    guardWrite({
+      text: [["content", content], ["dedup_key", input.dedupKey]],
+      metadata: input.metadata,
+      sourceUrl: input.sourceUrl,
+    });
     const kind = checkKind(input.kind) ?? "fact";
     const claimType = checkClaimType(input.claimType) ?? "observation";
     const expected = input.expectedVersion;
@@ -609,6 +628,11 @@ export class PostgresStore {
     const reason = typeof input.reason === "string" ? input.reason.trim() : "";
     if (!reason) throw new StoreError("invalid", "reason must say why the memory changed");
     if (reason.length > MAX_REASON) throw new StoreError("invalid", `reason is longer than ${MAX_REASON} characters`);
+    guardWrite({
+      text: [["content", content], ["reason", reason]],
+      metadata: input.metadata,
+      sourceUrl: input.sourceUrl,
+    });
     const kindGiven = checkKind(input.kind);
     const claimGiven = checkClaimType(input.claimType);
     const model = await this.modelFor(rawKey, input.namespace, true);
@@ -751,6 +775,7 @@ export class PostgresStore {
     if (typeof input.filename !== "string" || !input.filename.trim()) {
       throw new StoreError("invalid", "filename is required");
     }
+    guardWrite({ text: [["content", input.content]], filename: input.filename });
     const chunks = chunkText(input.content, CHUNK_CHARS).flatMap((ch) => {
       const parts: string[] = [];
       for (let i = 0; i < ch.length; i += CHUNK_CHARS) parts.push(ch.slice(i, i + CHUNK_CHARS));

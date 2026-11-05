@@ -198,7 +198,15 @@ export function createHttpApp(opts: HttpAppOptions): express.Express {
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (err) {
-      console.error("[engramport] /mcp error:", err);
+      // Never the error itself: a database error can carry the values of the
+      // row it was writing, which could be memory text (D-07).
+      const e = err as { name?: unknown; code?: unknown };
+      console.error(JSON.stringify({
+        event: "mcp_error",
+        request_id: res.locals.requestId,
+        error: typeof e?.name === "string" ? e.name.slice(0, 60) : "Error",
+        ...(typeof e?.code === "string" ? { code: e.code.slice(0, 20) } : {}),
+      }));
       if (!res.headersSent) {
         res.status(500).json({
           jsonrpc: "2.0",

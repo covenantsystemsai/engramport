@@ -1,0 +1,10 @@
+# Local Terraform files never go in the repository: state can hold resource
+# ids, and tfvars and backend files are filled in per account.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+backend.hcl
+crash.log
+*.tfplan

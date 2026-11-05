@@ -1,0 +1,43 @@
+name: terraform
+
+# Checks the deploy files (deploy/terraform) on every pull request that touches
+# them. It never plans or applies: it has no AWS credentials, and none may be
+# added to this workflow.
+on:
+  pull_request:
+    paths:
+      - "deploy/terraform/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "deploy/terraform/**"
+
+permissions:
+  contents: read
+
+env:
+  # Pinned by digest; update on purpose, in a reviewed change.
+  TERRAFORM_IMAGE: hashicorp/terraform:1.17.1@sha256:a5d5a5a892c98f60fcbfa81eac2a40fc19e7b3fa7719bccae10ff6111d22524a
+  CHECKOV_IMAGE: bridgecrew/checkov:3.4.3@sha256:bfe9d70bb7f044aba49bd99675813445f106dee6072da583f51008cb667f3a63
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Format
+        run: docker run --rm -v "$PWD/deploy/terraform:/w" -w /w "$TERRAFORM_IMAGE" fmt -check -recursive -diff
+
+      - name: Validate each stack, with no backend and no credentials
+        run: |
+          for stack in pilot bootstrap; do
+            echo "::group::$stack"
+            docker run --rm -v "$PWD/deploy/terraform:/w" -w "/w/$stack" "$TERRAFORM_IMAGE" init -backend=false -input=false -no-color
+            docker run --rm -v "$PWD/deploy/terraform:/w" -w "/w/$stack" "$TERRAFORM_IMAGE" validate -no-color
+            echo "::endgroup::"
+          done
+
+      - name: Security scan
+        run: docker run --rm -v "$PWD/deploy/terraform:/w" "$CHECKOV_IMAGE" -d /w --framework terraform --compact --quiet

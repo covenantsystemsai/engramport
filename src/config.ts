@@ -91,6 +91,13 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env) {
      */
     cellErasurePage: (env.ENGRAMPORT_CELL_ERASURE_PAGE || "").toLowerCase() === "true",
 
+    /**
+     * The page where a person accepts or declines, with their own Google sign-in,
+     * the approval authority, erase or export grants and confirmer role offered to
+     * them. Off unless set to true. Needs OAuth.
+     */
+    acceptPage: (env.ENGRAMPORT_ACCEPT_PAGE || "").toLowerCase() === "true",
+
     /** The server's public origin (https, no path): the OAuth issuer. */
     publicUrl: (env.ENGRAMPORT_PUBLIC_URL || "").replace(/\/+$/, ""),
 
@@ -153,6 +160,7 @@ export function configProblems(cfg: Config, mode: "stdio" | "http" = cfg.mode): 
   if (cfg.exportPage) return ["ENGRAMPORT_EXPORT_PAGE needs ENGRAMPORT_STORE=postgres."];
   if (cfg.restorePage) return ["ENGRAMPORT_RESTORE_PAGE needs ENGRAMPORT_STORE=postgres."];
   if (cfg.cellErasurePage) return ["ENGRAMPORT_CELL_ERASURE_PAGE needs ENGRAMPORT_STORE=postgres."];
+  if (cfg.acceptPage) return ["ENGRAMPORT_ACCEPT_PAGE needs ENGRAMPORT_STORE=postgres."];
   if (cfg.store !== "eidetic") return [`ENGRAMPORT_STORE must be eidetic or postgres, not ${cfg.store}.`];
   const problems: string[] = [];
   if (!cfg.apiUrl) {
@@ -232,6 +240,9 @@ function postgresProblems(cfg: Config, mode: "stdio" | "http"): string[] {
   }
   if (cfg.cellErasurePage && !cfg.oauth) {
     problems.push("ENGRAMPORT_CELL_ERASURE_PAGE needs ENGRAMPORT_OAUTH=true, for its Google sign-in.");
+  }
+  if (cfg.acceptPage && !cfg.oauth) {
+    problems.push("ENGRAMPORT_ACCEPT_PAGE needs ENGRAMPORT_OAUTH=true, for its Google sign-in.");
   }
   return problems;
 }

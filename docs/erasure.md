@@ -46,8 +46,8 @@ Founder decision D-02, decided Nov 4:
 | Admin ledger: `engramport admin erasure list` | Built |
 | The owner's page to review and confirm: `/erase/<request id>` | Built, off unless `ENGRAMPORT_ERASURE_PAGE=true` |
 | Export by an owner: `/export` | Built, off unless `ENGRAMPORT_EXPORT_PAGE=true`; see Export below |
-| Delegated erase and export grants | Built in the database (`0024_data_grants.sql`); the page where owners give them and holders accept them is next |
-| Whole-cell erasure with a cell-erasure-confirmer (D-02.1a) | Built: the database (`0026_cell_erasure.sql`), the admin commands `confirmer` and `cell-erasure`, and the pages for starting and confirming (`/cell-erasure`), off unless `ENGRAMPORT_CELL_ERASURE_PAGE=true`; the page for accepting the role is next. See Whole-cell erasure below |
+| Delegated erase and export grants | Built: the database (`0024_data_grants.sql`) and the acceptance page (`/accept`), off unless `ENGRAMPORT_ACCEPT_PAGE=true`; the page where owners give them is next |
+| Whole-cell erasure with a cell-erasure-confirmer (D-02.1a) | Built: the database (`0026_cell_erasure.sql`), the admin commands `confirmer` and `cell-erasure`, the pages for starting and confirming (`/cell-erasure`), off unless `ENGRAMPORT_CELL_ERASURE_PAGE=true`, and accepting the role on `/accept`. See Whole-cell erasure below |
 | 30-day retraction restore window | Built: the database (`0025_retraction_restore.sql`), the admin ledger `engramport admin restore list`, and the page `/restore`, off unless `ENGRAMPORT_RESTORE_PAGE=true`. See Retraction and restoring below |
 
 ## The page
@@ -236,8 +236,16 @@ namespace (D-02 item 2 and D-02.4). The database side is
 - **The record.** An erasure or export done under a grant records both the
   grant and the owner's authority it rests on, and who decided.
 
-The page where owners give grants and holders accept them is the next step;
-until then these are database functions only, like approval delegation.
+Holders accept or decline grants on the acceptance page,
+`<public URL>/accept`: the person signs in with Google, sees everything offered
+to them (approval authority, erase and export grants, the cell-erasure-confirmer
+role) with each one's exact terms and fingerprint, picks one to accept or
+decline, and confirms. One decision per sign-in. The page is off unless
+`ENGRAMPORT_ACCEPT_PAGE=true`, which needs the Postgres store, OAuth set up and
+`<public URL>/accept/callback` in Supabase's redirect URLs; its tests are
+`test/accept-http.pg.test.ts`.
+The page where owners give grants is next; until then grants are given through
+the database function only, like approval delegation.
 
 ## Retraction and restoring
 
@@ -359,6 +367,6 @@ the challenge's secret only in an encrypted cookie of their own that no other
 page's cookie can stand in for, and use each sign-in once. They are off unless
 `ENGRAMPORT_CELL_ERASURE_PAGE=true`, which needs the Postgres store, OAuth set
 up and `<public URL>/cell-erasure/callback` in Supabase's redirect URLs. Their
-tests are `test/cell-erasure-http.pg.test.ts`. The page where a person accepts
-the confirmer role is next; until then it is accepted through the database
-functions only.
+tests are `test/cell-erasure-http.pg.test.ts`. The person named accepts
+the confirmer role on the acceptance page (`/accept`, see Delegated grants
+above).

@@ -91,6 +91,9 @@ async function hostedAuth() {
   const cellErasure = config.cellErasurePage
     ? (await import("./cell-erase.js")).createCellErasureRouter({ publicUrl: config.publicUrl, pepper, db: sharedPool(), identity })
     : undefined;
+  const accept = config.acceptPage
+    ? (await import("./accept.js")).createAcceptRouter({ publicUrl: config.publicUrl, pepper, db: sharedPool(), identity })
+    : undefined;
   return {
     authenticate,
     resourceMetadataUrl: resourceMetadataUrl(config.publicUrl),
@@ -106,6 +109,7 @@ async function hostedAuth() {
     ...(exportPage ? { exportPage } : {}),
     ...(restore ? { restore } : {}),
     ...(cellErasure ? { cellErasure } : {}),
+    ...(accept ? { accept } : {}),
   };
 }
 

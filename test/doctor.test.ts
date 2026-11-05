@@ -14,11 +14,12 @@ const downFetch = (async () => {
   throw new Error("ECONNREFUSED");
 }) as typeof fetch;
 const noToken = async () => "";
+const testToken = async () => "synthetic-token";
 
 test("doctor never prints the key", async () => {
   const lines: string[] = [];
   const cfg = resolveConfig(env({ ENGRAMPORT_MODE: "stdio", ENGRAMPORT_API_URL: "https://api.example.com", ENGRAMPORT_API_KEY: KEY }));
-  const code = await runDoctor(cfg, (l) => lines.push(l), okFetch, noToken);
+  const code = await runDoctor(cfg, (l) => lines.push(l), okFetch, testToken);
   assert.equal(code, 0);
   const text = lines.join("\n");
   assert.ok(!text.includes(KEY.slice(7)), "no more than a short prefix of the key is printed");
@@ -27,7 +28,7 @@ test("doctor never prints the key", async () => {
 
 test("doctor exits 1 and names the problem when the URL is missing", async () => {
   const lines: string[] = [];
-  const code = await runDoctor(resolveConfig(env({ ENGRAMPORT_MODE: "stdio" })), (l) => lines.push(l), okFetch, noToken);
+  const code = await runDoctor(resolveConfig(env({ ENGRAMPORT_MODE: "stdio" })), (l) => lines.push(l), okFetch, testToken);
   assert.equal(code, 1);
   assert.match(lines.join("\n"), /ENGRAMPORT_API_URL is not set/);
 });
@@ -35,7 +36,7 @@ test("doctor exits 1 and names the problem when the URL is missing", async () =>
 test("doctor exits 1 when the API is unreachable", async () => {
   const lines: string[] = [];
   const cfg = resolveConfig(env({ ENGRAMPORT_MODE: "stdio", ENGRAMPORT_API_URL: "https://api.example.com", ENGRAMPORT_API_KEY: KEY }));
-  assert.equal(await runDoctor(cfg, (l) => lines.push(l), downFetch, noToken), 1);
+  assert.equal(await runDoctor(cfg, (l) => lines.push(l), downFetch, testToken), 1);
   assert.match(lines.join("\n"), /unreachable/);
 });
 
@@ -51,7 +52,7 @@ test("doctor sends the Cloud Run ID token, like normal tool calls", async () => 
 
   const lines: string[] = [];
   assert.equal(await runDoctor(cfg, (l) => lines.push(l), gated, noToken), 1);
-  assert.match(lines.join("\n"), /no Cloud Run ID token/);
+  assert.match(lines.join("\n"), /no Cloud Run ID token/i);
 });
 
 test("keyPreview shows at most a third of a short key", () => {
@@ -70,7 +71,7 @@ test("doctor on the postgres store shows the database user and host, never the p
     ENGRAMPORT_KEY_PEPPER: Buffer.alloc(32, 3).toString("base64"),
   }));
   let pinged = false;
-  const code = await runDoctor(cfg, (l) => lines.push(l), okFetch, noToken, async () => {
+  const code = await runDoctor(cfg, (l) => lines.push(l), okFetch, testToken, async () => {
     pinged = true;
   });
   assert.equal(code, 0);
@@ -89,9 +90,20 @@ test("doctor on the postgres store exits 1 when the database is unreachable", as
     ENGRAMPORT_DATABASE_URL: "postgresql://engramport_app@db.example.com/postgres",
     ENGRAMPORT_KEY_PEPPER: Buffer.alloc(32, 3).toString("base64"),
   }));
-  const code = await runDoctor(cfg, (l) => lines.push(l), okFetch, noToken, async () => {
+  const code = await runDoctor(cfg, (l) => lines.push(l), okFetch, testToken, async () => {
     throw new Error("timeout");
   });
   assert.equal(code, 1);
   assert.match(lines.join("\n"), /database:\s+unreachable \(timeout\)/);
+});
+
+
+test("doctor on an explicit gateway uses healthz without minting a client Google token", async () => {
+  const cfg = resolveConfig(env({ ENGRAMPORT_MODE: "stdio", ENGRAMPORT_API_URL: "https://gateway.example.com", ENGRAMPORT_LEGACY_AUTH: "gateway", ENGRAMPORT_API_KEY: KEY }));
+  const probe = (async (url: string, init?: RequestInit) => {
+    assert.equal(url, "https://gateway.example.com/healthz");
+    assert.equal(new Headers(init?.headers).has("X-Serverless-Authorization"), false);
+    return new Response("{}");
+  }) as typeof fetch;
+  assert.equal(await runDoctor(cfg, () => {}, probe, async () => { assert.fail("gateway mints upstream identity"); }), 0);
 });

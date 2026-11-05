@@ -10,6 +10,7 @@ import { Config, configProblems } from "./config.js";
 import { createPool } from "./store/postgres.js";
 import { VERSION } from "./server.js";
 import { getIdToken } from "./auth.js";
+import { legacyFetch } from "./legacy-auth.js";
 
 export function keyPreview(key: string): string {
   if (!key) return "(not set)";
@@ -84,15 +85,15 @@ export async function runDoctor(
   if (!cfg.apiUrl || problems.some((p) => p.includes("not a valid URL"))) return 1;
 
   try {
-    // Same Cloud Run gate as normal tool calls (see eidetic.ts), so an
-    // IAM-protected backend is not reported as broken.
-    const headers: Record<string, string> = {};
-    const token = await idToken(cfg.apiUrl);
-    if (token) headers["X-Serverless-Authorization"] = `Bearer ${token}`;
-    const res = await fetchImpl(`${cfg.apiUrl}/health`, { headers, signal: AbortSignal.timeout(5000) });
+    // Same fail-closed transport as tools. A health response alone does not
+    // prove the caller key or its namespace authorization.
+    const healthPath = cfg.legacyAuth === "gateway" ? "/healthz" : "/health";
+    const res = await legacyFetch(cfg, `${cfg.apiUrl}${healthPath}`, {
+      signal: AbortSignal.timeout(5000),
+    }, { fetchImpl, idToken }, false);
     out(`  health:    ${res.status} ${res.ok ? "ok" : res.statusText}`);
     if (res.status === 401 || res.status === 403) {
-      out(`  hint:      the backend refused this identity${token ? "" : " (no Cloud Run ID token was available)"}`);
+      out(`  hint:      the backend refused this identity`);
     }
     if (!res.ok) problems.push("health check failed");
   } catch (err) {

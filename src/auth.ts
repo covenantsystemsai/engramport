@@ -107,6 +107,7 @@ const mintMutex = new Mutex();
 interface CacheEntry {
   token: string;
   identity: string;
+  audience: string;
   expiresAt: number; // epoch millis
 }
 
@@ -135,14 +136,15 @@ function decodeJwtEmail(token: string): string {
   }
 }
 
-function readDiskCache(): CacheEntry | null {
+function readDiskCache(audience: string): CacheEntry | null {
   try {
     if (!existsSync(TOKEN_CACHE_PATH)) return null;
     const raw = readFileSync(TOKEN_CACHE_PATH, "utf-8");
     const rec = JSON.parse(raw) as DiskCacheRecord;
-    if (!rec.token || typeof rec.expires_at !== "number") return null;
+    if (!rec.token || typeof rec.token !== "string" || typeof rec.expires_at !== "number") return null;
+    if (rec.audience !== audience || (GCLOUD_ACCOUNT && rec.identity !== GCLOUD_ACCOUNT)) return null;
     if (rec.expires_at <= Date.now() + 60_000) return null; // require 1min slack
-    return { token: rec.token, identity: rec.identity, expiresAt: rec.expires_at };
+    return { token: rec.token, identity: rec.identity, audience, expiresAt: rec.expires_at };
   } catch {
     return null;
   }
@@ -280,14 +282,14 @@ async function mintIdToken(audience: string): Promise<string> {
   const fromMeta = await fetchTokenFromMetadataServer(audience);
   if (fromMeta) {
     const identity = decodeJwtEmail(fromMeta);
-    memoryCache = { token: fromMeta, identity, expiresAt: Date.now() + TOKEN_TTL_MS };
+    memoryCache = { token: fromMeta, identity, audience, expiresAt: Date.now() + TOKEN_TTL_MS };
     writeDiskCache(fromMeta, identity, audience);
     return fromMeta;
   }
 
   const gcloud = resolveGcloud();
   if (!gcloud) {
-    log("no gcloud binary found in any candidate path; requests will go without OIDC and likely 403");
+    log("no gcloud binary found in any candidate path; direct backend requests will be refused locally");
     return "";
   }
 
@@ -319,7 +321,7 @@ async function mintIdToken(audience: string): Promise<string> {
   }
   const identity = decodeJwtEmail(tok);
   const expiresAt = Date.now() + TOKEN_TTL_MS;
-  memoryCache = { token: tok, identity, expiresAt };
+  memoryCache = { token: tok, identity, audience, expiresAt };
   writeDiskCache(tok, identity, audience);
   log(`OIDC token minted ok (length ${tok.length}, identity=${identity})`);
   return tok;
@@ -333,22 +335,22 @@ async function mintIdToken(audience: string): Promise<string> {
  *   2. cross-process disk cache (warm, survives restarts; populatable from terminal)
  *   3. gcloud subprocess (cold path; populates both caches)
  *
- * Returns empty string on failure. Callers should still proceed to the HTTP
- * request so the 403 surfaces visibly rather than silently swallowing.
+ * Returns empty string on failure. Direct Cloud Run callers must refuse the
+ * request locally; never fall back to an API-key-only request.
  *
- * The `audience` argument is recorded in the disk cache for diagnostic purposes
- * but is intentionally NOT passed to gcloud (--audiences requires SA creds and
+ * Cache entries are scoped to the requested audience. It is intentionally
+ * NOT passed to the developer gcloud fallback (--audiences requires SA creds and
  * rejects user creds). The plain user token works because Cloud Run accepts
  * tokens whose audience is the gcloud OAuth client ID when the identity has
  * invoker permission on the target service.
  */
 export async function getIdToken(audience: string): Promise<string> {
   // Layer 1
-  if (memoryCache && memoryCache.expiresAt > Date.now() + 60_000) {
+  if (memoryCache && memoryCache.audience === audience && memoryCache.expiresAt > Date.now() + 60_000) {
     return memoryCache.token;
   }
   // Layer 2
-  const fromDisk = readDiskCache();
+  const fromDisk = readDiskCache(audience);
   if (fromDisk) {
     memoryCache = fromDisk;
     log(`loaded OIDC token from disk cache (identity=${fromDisk.identity})`);
@@ -357,10 +359,10 @@ export async function getIdToken(audience: string): Promise<string> {
   // Layer 3 (serialized)
   const release = await mintMutex.acquire();
   try {
-    if (memoryCache && memoryCache.expiresAt > Date.now() + 60_000) {
+    if (memoryCache && memoryCache.audience === audience && memoryCache.expiresAt > Date.now() + 60_000) {
       return memoryCache.token;
     }
-    const recheck = readDiskCache();
+    const recheck = readDiskCache(audience);
     if (recheck) {
       memoryCache = recheck;
       return recheck.token;

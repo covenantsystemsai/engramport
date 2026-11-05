@@ -118,7 +118,7 @@ Categories follow section 3 of the directive. "Section" is the directive section
 | Item | Conflict | Proposed fix |
 | --- | --- | --- |
 | `ENGRAMPORT_STORE` defaults to `eidetic` (`src/config.ts`) | The old backend is still the default | Default to `postgres`, keep `eidetic` as an explicit opt-in (one small PR) |
-| `Dockerfile` targets the old Cloud Run backend and its service account | The image does not run the Postgres store as designed | New deploy artifacts under D-05; until then do not use this image |
+| `Dockerfile` targets the old Cloud Run backend and its service account | The image does not run the Postgres store as designed | Replaced by the container files for D-06 (`docs/hosting.md`); until then do not use this image |
 | `package.json` description says "bring-your-own-LLM (any model via OpenRouter)" | Not what the product is now | Fix with the next release under D-08 |
 | `publish.yml` publishes to npm on any `v*` tag | A tag is a release; the published packages predate all Postgres work | Leave alone until D-08; consider an approval environment on that job |
 | Memory text may carry "approved" in prose | Section 6.3: a model writing "approved" is not an authorization | The trust layer stores approval only as a separate, server-recorded event |
@@ -138,8 +138,8 @@ is a starting point for that conversation, not an assumption anything is built o
 | D-02 | Deletion, retention, backups and export | Decided Nov 4: a person with authority erases, agents only ask; erasure removes the text and everything derived and keeps a tombstone with no content-derived data, not even a fingerprint; at most 100 memories per request; whole-cell erasure needs the owner and a different person with AN2B governance authority, decided Nov 4 as a dedicated cell-erasure-confirmer role (D-02.1a: explicitly assigned to a named human, accepted with their own sign-in, scoped, expiring or revocable, separate from memory-approval permissions; the confirmer sees no memory content and can't initiate or confirm their own request); retraction is separate and restorable by a person for 30 days, erasure is final; restored backups are reconciled against erasures before serving; export needs its own accepted grant and is never stored on the server; grant recipients are chosen by typed email, decided Nov 5 (D-02 Grant Recipient Selection: no member directory, no membership disclosed through errors, inactive until the recipient accepts). See `docs/erasure.md` | Gate 2 deletion work |
 | D-03 | Who may approve and who may verify | Only human actors may approve, and only the namespace owner and the founder at first. Agents may propose and may attach evidence; they may not approve or mark verified | Gate 2 trust layer |
 | D-04 | Revising an approved memory | Decided Nov 4: an agent's revision is a proposal; the approved version stays current until a person approves the proposal, which then replaces it atomically. See `docs/approvals.md` | Gate 2 trust layer |
-| D-05 | Permission to author deploy files and a setup script (files only) | Yes for files in a PR, with deploy kept as its own later decision | Gate 3 preparation |
-| D-06 | Where the HTTP server runs | Compare Supabase Edge Functions, Cloud Run and Fly.io in a short doc before choosing | Gate 3 |
+| D-05 | Permission to author deploy files and a setup script (files only) | Decided Nov 5: deployment configuration, environment templates, infrastructure definitions, an installation and verification guide, and a Max setup script with dry run, as files only, locally validated and independently reviewed. No deployment, provisioning, live migration, credential provisioning, customer-data access, Max activation or public access | Gate 3 preparation |
+| D-06 | Where the HTTP server runs | Decided Nov 5: Amazon ECS on Fargate behind an Application Load Balancer in us-east-1, with the existing Supabase project and AWS Secrets Manager. See `docs/hosting.md` | Gate 3 |
 | D-07 | The old Cloud Run backend | Require authentication on it, then retire it once the Postgres store is live | Gate 3 |
 | D-08 | npm releases | No release until Gate 3 passes; then a major version whose default store is Postgres | Gate 4 |
 | D-09 | Memory write policy (what must never be stored); numbered D-04 until Nov 4 | Write the founder's never-store list as policy text first, enforce it later. Not approved yet | Gate 3 |
@@ -174,7 +174,7 @@ the live project; every live step is in section 7 and needs its own yes.
 
 ### Gate 3: live service
 
-13. Hosting comparison (D-06), then deploy artifacts and a setup script, files only (D-05).
+13. Hosting comparison (D-06, decided: ECS Fargate behind an ALB, `docs/hosting.md`), then deploy artifacts and a setup script, files only (D-05).
 14. Live steps in section 7, each on its own yes.
 15. Non-content metrics: request counts, latency, errors, per namespace, never text.
 

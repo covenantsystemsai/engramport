@@ -68,6 +68,8 @@ const SAMPLES = {
     "Bank account #12345678 at the credit union.",
     "IBAN: GB82 WEST 1234 5698 7654 32",
     "Wire to DE89370400440532013000 today.",
+    "IBAN: GB82 WEST 1234 5698 7654 32 FOR RENT",
+    "IBAN: DE89370400440532013000 EUR",
   ],
   transcript: [
     "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nHello",

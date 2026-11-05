@@ -196,6 +196,39 @@ export interface RestorationRow {
   restored_to: "active" | "proposed";
 }
 
+export interface ConfirmerRow {
+  id: string;
+  holder: string;
+  scope: string;
+  assigned_at: Date;
+  expires_at: Date;
+  state: "waiting" | "accepted" | "rejected" | "revoked" | "expired";
+  /** Whether it counts right now: accepted, unexpired, unrevoked, and the holder still belongs to AN2B. */
+  valid: boolean;
+  revoked_at: Date | null;
+  revoke_reason: string | null;
+}
+
+export interface CellErasureRow {
+  id: string;
+  namespace: string;
+  reason: string;
+  state: "proposed" | "lapsed" | "completed" | "cancelled";
+  started_by: string;
+  authority_id: string;
+  created_at: Date;
+  expires_at: Date;
+  confirmed_by: string | null;
+  confirmer_role_id: string | null;
+  completed_at: Date | null;
+  /** What the owner was shown, and what was removed: counts only. */
+  preview: Record<string, number>;
+  evidence: Record<string, number | boolean | string> | null;
+  cancelled_at: Date | null;
+  cancel_reason: string | null;
+  tombstones: number;
+}
+
 export interface DataGrantRow {
   id: string;
   namespace: string;
@@ -962,6 +995,126 @@ export class AdminClient {
   }
 
   /**
+   * Assigns the cell-erasure-confirmer role (D-02.1a) to one named person who
+   * belongs to AN2B, over a scope, until a date. It counts only once they
+   * accept it with their own sign-in. It grants nothing else.
+   */
+  async assignConfirmer(opts: { actor: string; scope: string; expiresInMs: number }): Promise<ConfirmerRow> {
+    checkSlug(opts.actor, "actor name");
+    checkPath(opts.scope);
+    if (!(opts.expiresInMs > 0) || opts.expiresInMs > 366 * 86_400_000) {
+      throw new AdminError("the role ends within a year; give --expires-in, such as 90d");
+    }
+    return this.tx(async (c) => {
+      const ns = await c.query<{ id: string }>("SELECT id FROM memory.namespaces WHERE path = $1", [opts.scope]);
+      if (!ns.rows[0]) throw new AdminError(`no namespace ${opts.scope}`);
+      const actor = await c.query<{ id: string }>("SELECT id FROM memory.actors WHERE slug = $1", [opts.actor]);
+      if (!actor.rows[0]) throw new AdminError(`no actor ${opts.actor}`);
+      try {
+        const r = await c.query<{ id: string }>(
+          `INSERT INTO memory.cell_erasure_confirmers (actor_id, scope_namespace_id, expires_at)
+           VALUES ($1, $2, $3) RETURNING id`,
+          [actor.rows[0].id, ns.rows[0].id, new Date(Date.now() + opts.expiresInMs)],
+        );
+        return (await this.confirmers(c, { id: r.rows[0].id, includeEnded: true }))[0];
+      } catch (err) {
+        if ((err as { code?: string }).code === "42501") {
+          throw new AdminError(`${opts.actor} is not an enabled person who belongs to AN2B (a member of a company namespace)`);
+        }
+        throw err;
+      }
+    });
+  }
+
+  /** Cell-erasure-confirmer roles: who holds one, over what, until when, and whether it counts now. */
+  async listConfirmers(opts: { includeEnded?: boolean } = {}): Promise<ConfirmerRow[]> {
+    return this.tx((c) => this.confirmers(c, opts));
+  }
+
+  private async confirmers(c: pg.PoolClient, opts: { includeEnded?: boolean; id?: string }) {
+    return (await c.query<ConfirmerRow>(
+      `SELECT r.id, a.slug AS holder, n.path AS scope, r.assigned_at, r.expires_at,
+              CASE WHEN r.revoked_at IS NOT NULL THEN 'revoked' WHEN r.rejected_at IS NOT NULL THEN 'rejected'
+                   WHEN r.expires_at <= now() THEN 'expired' WHEN r.accepted_at IS NOT NULL THEN 'accepted'
+                   ELSE 'waiting' END AS state,
+              memory.confirmer_role_valid(r.id) AS valid, r.revoked_at, r.revoke_reason
+       FROM memory.cell_erasure_confirmers r
+       JOIN memory.actors a ON a.id = r.actor_id
+       JOIN memory.namespaces n ON n.id = r.scope_namespace_id
+       WHERE ($1 OR (r.revoked_at IS NULL AND r.rejected_at IS NULL AND r.expires_at > now()))
+         AND ($2::uuid IS NULL OR r.id = $2)
+       ORDER BY r.assigned_at DESC, r.id`,
+      [opts.includeEnded ?? false, opts.id ?? null],
+    )).rows;
+  }
+
+  /** Ends a confirmer role at once. */
+  async revokeConfirmer(id: string, reason: string): Promise<ConfirmerRow> {
+    if (!UUID.test(id)) throw new AdminError(`not a role id: ${id}`);
+    const why = reason.trim();
+    if (!/^[a-z][a-z0-9_]{0,39}$/.test(why)) {
+      throw new AdminError("give the reason as a short code of lowercase letters and underscores, such as left_an2b");
+    }
+    return this.tx(async (c) => {
+      const cur = await c.query<{ revoked_at: Date | null }>(
+        "SELECT revoked_at FROM memory.cell_erasure_confirmers WHERE id = $1", [id]);
+      if (!cur.rows[0]) throw new AdminError(`no role ${id}`);
+      if (cur.rows[0].revoked_at) throw new AdminError(`role ${id} is already revoked`);
+      await c.query("UPDATE memory.cell_erasure_confirmers SET revoked_at = now(), revoke_reason = $2 WHERE id = $1", [id, why]);
+      return (await this.confirmers(c, { id, includeEnded: true }))[0];
+    });
+  }
+
+  /**
+   * Whole-cell erasures, newest first: who started which cell's, who confirmed
+   * it under which role, and the counts shown and removed. Never content; the
+   * admin can't start or confirm one.
+   */
+  async listCellErasures(opts: { namespace?: string; sinceMs?: number; limit?: number; id?: string } = {}): Promise<CellErasureRow[]> {
+    if (opts.namespace) checkPath(opts.namespace);
+    const limit = opts.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new AdminError("--limit is 1 to 1000");
+    const since = opts.sinceMs === undefined ? null : new Date(Date.now() - opts.sinceMs);
+    return this.tx(async (c) => this.cellErasures(c, { ...opts, since, limit }));
+  }
+
+  private async cellErasures(c: pg.PoolClient, opts: { namespace?: string; since?: Date | null; limit?: number; id?: string }) {
+    return (await c.query<CellErasureRow>(
+      `SELECT r.id, n.path AS namespace, r.reason::text AS reason,
+              CASE WHEN r.state = 'proposed' AND r.expires_at <= now() THEN 'lapsed' ELSE r.state::text END AS state,
+              a.slug AS started_by, r.authority_id, r.created_at, r.expires_at, d.slug AS confirmed_by, r.confirmer_role_id,
+              r.completed_at, r.preview, r.evidence, r.cancelled_at, r.cancel_reason,
+              (SELECT count(*)::int FROM memory.erasures e WHERE e.cell_request_id = r.id) AS tombstones
+       FROM memory.cell_erasure_requests r
+       JOIN memory.namespaces n ON n.id = r.namespace_id
+       JOIN memory.actors a ON a.id = r.initiated_by_actor_id
+       LEFT JOIN memory.actors d ON d.id = r.confirmed_by_actor_id
+       WHERE ($1::text IS NULL OR n.path = $1 OR starts_with(n.path, $1 || '/'))
+         AND ($2::timestamptz IS NULL OR r.created_at >= $2)
+         AND ($4::uuid IS NULL OR r.id = $4)
+       ORDER BY r.created_at DESC, r.id
+       LIMIT $3`,
+      [opts.namespace ?? null, opts.since ?? null, opts.limit ?? 100, opts.id ?? null],
+    )).rows;
+  }
+
+  /** Cancels an open whole-cell erasure, which unfreezes the cell. */
+  async cancelCellErasure(id: string, reason: string): Promise<CellErasureRow> {
+    if (!UUID.test(id)) throw new AdminError(`not a request id: ${id}`);
+    const why = reason.trim();
+    if (!/^[a-z][a-z0-9_]{0,39}$/.test(why)) {
+      throw new AdminError("give the reason as a short code of lowercase letters and underscores, such as started_by_mistake");
+    }
+    return this.tx(async (c) => {
+      const cur = await c.query<{ state: string }>("SELECT state::text AS state FROM memory.cell_erasure_requests WHERE id = $1", [id]);
+      if (!cur.rows[0]) throw new AdminError(`no whole-cell erasure ${id}`);
+      if (cur.rows[0].state !== "proposed") throw new AdminError(`whole-cell erasure ${id} is ${cur.rows[0].state}, not open`);
+      await c.query("UPDATE memory.cell_erasure_requests SET state = 'cancelled', cancel_reason = $2 WHERE id = $1", [id, why]);
+      return (await this.cellErasures(c, { id }))[0];
+    });
+  }
+
+  /**
    * Delegated erase and export grants: who gave which power to whom over which
    * namespace, until when, and whether it counts now. Never content.
    */
@@ -1184,6 +1337,22 @@ export const ADMIN_USAGE = `Usage: engramport admin <command>
                                      which authority, and when it was retracted.
                                      Never the text; the admin can't restore. A
                                      person with authority restores within 30 days.
+  confirmer assign <actor> --scope <path> --expires-in 90d
+                                     gives a person who belongs to AN2B the
+                                     cell-erasure-confirmer role over the cells at
+                                     or under a namespace. It counts once they
+                                     accept it with their own sign-in, and grants
+                                     nothing else.
+  confirmer list [--all]             who holds the role, over what, until when
+  confirmer revoke <id> --reason <code>
+                                     ends one at once
+  cell-erasure list [--namespace <path>] [--since 7d] [--limit 100]
+                                     whole-cell erasures: who started which, who
+                                     confirmed it under which role, and counts.
+                                     Never content; the admin can't start or
+                                     confirm one.
+  cell-erasure cancel <id> --reason <code>
+                                     cancels an open one, which unfreezes the cell
   grant list [--namespace <path>] [--all]
                                      delegated erase and export grants: who gave
                                      which power to whom, until when, and whether
@@ -1586,6 +1755,68 @@ export async function runAdmin(argv: string[], open: () => AdminClient, io: Admi
         if (typeof flags.reason !== "string") throw new UsageError("--reason is required");
         const a = await db().revokeAuthority(id, flags.reason);
         io.out(`${a.actor} can no longer approve in ${a.namespace} under ${a.id}; delegations made from it stop too`);
+        return 0;
+      }
+      case "confirmer assign": {
+        const { positional, flags } = parseFlags(rest, { scope: "value", "expires-in": "value" });
+        const actor = one(positional, "actor name");
+        if (typeof flags.scope !== "string") throw new UsageError("--scope is required");
+        if (typeof flags["expires-in"] !== "string") throw new UsageError("--expires-in is required, such as 90d");
+        const r = await db().assignConfirmer({ actor, scope: flags.scope, expiresInMs: parseDuration(flags["expires-in"]) });
+        io.out(`${r.id}  ${r.holder} may confirm whole-cell erasures under ${r.scope} until ${when(r.expires_at)}, `
+          + "once they accept it with their own sign-in");
+        return 0;
+      }
+      case "confirmer list": {
+        const { positional, flags } = parseFlags(rest, { all: "bool" });
+        if (positional.length) throw new UsageError(`unexpected argument ${positional[0]}`);
+        const rows = await db().listConfirmers({ includeEnded: flags.all === true });
+        for (const r of rows) {
+          const state = r.state === "revoked" ? `revoked ${when(r.revoked_at!)} (${r.revoke_reason})`
+            : r.state === "accepted" ? (r.valid ? "accepted, counts now" : "accepted, but no longer counts")
+            : r.state;
+          io.out(`${r.id}  ${r.holder}  over ${r.scope}  until ${when(r.expires_at)}  ${state}`);
+        }
+        if (!rows.length) io.err(flags.all ? "No confirmer roles." : "No open confirmer roles. Add --all to include ended ones.");
+        return 0;
+      }
+      case "confirmer revoke": {
+        const { positional, flags } = parseFlags(rest, { reason: "value" });
+        const id = one(positional, "role id");
+        if (typeof flags.reason !== "string") throw new UsageError("--reason is required");
+        const r = await db().revokeConfirmer(id, flags.reason);
+        io.out(`${r.holder} can no longer confirm whole-cell erasures under ${r.scope} (${r.id})`);
+        return 0;
+      }
+      case "cell-erasure list": {
+        const { positional, flags } = parseFlags(rest, { namespace: "value", since: "value", limit: "value" });
+        if (positional.length) throw new UsageError(`unexpected argument ${positional[0]}`);
+        const rows = await db().listCellErasures({
+          namespace: typeof flags.namespace === "string" ? flags.namespace : undefined,
+          sinceMs: typeof flags.since === "string" ? parseDuration(flags.since) : undefined,
+          limit: typeof flags.limit === "string" ? Number(flags.limit) : undefined,
+        });
+        for (const r of rows) {
+          const counts = (o: Record<string, unknown>) => Object.entries(o)
+            .filter(([, v]) => typeof v === "number").map(([k, v]) => `${v} ${k.replace(/_/g, " ")}`).join(", ");
+          const state = r.state === "completed"
+            ? `erased ${when(r.completed_at!)}, confirmed by ${r.confirmed_by} under role ${r.confirmer_role_id}: `
+              + `${counts(r.evidence ?? {})}${r.evidence?.verified ? ", verified" : ""}`
+            : r.state === "cancelled" ? `cancelled ${when(r.cancelled_at!)} (${r.cancel_reason})`
+            : r.state === "lapsed" ? "lapsed without confirmation"
+            : `waiting for a confirmer until ${when(r.expires_at)}; the cell is frozen`;
+          io.out(`${when(r.created_at)}  ${r.id}  ${r.namespace}  ${r.reason}  started by ${r.started_by} under `
+            + `${r.authority_id}  shown ${counts(r.preview)}  ${state}`);
+        }
+        if (!rows.length) io.err("No whole-cell erasures.");
+        return 0;
+      }
+      case "cell-erasure cancel": {
+        const { positional, flags } = parseFlags(rest, { reason: "value" });
+        const id = one(positional, "request id");
+        if (typeof flags.reason !== "string") throw new UsageError("--reason is required");
+        const r = await db().cancelCellErasure(id, flags.reason);
+        io.out(`whole-cell erasure ${r.id} of ${r.namespace} cancelled; the cell takes writes again`);
         return 0;
       }
       case "grant list": {

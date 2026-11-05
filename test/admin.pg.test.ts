@@ -605,6 +605,67 @@ describe("engramport admin", { skip: SUPER_URL ? false : "ENGRAMPORT_TEST_DATABA
     }
   });
 
+  test("the admin assigns the cell-erasure-confirmer role, lists whole-cell erasures and cancels one, and nothing more", async () => {
+    // There is one company city; use it, or make it.
+    const company = (await superPool.query<{ id: string }>(
+      "SELECT id FROM memory.namespaces WHERE level = 'city' AND purpose = 'company'")).rows[0]?.id
+      ?? (await superPool.query<{ id: string }>(
+        "INSERT INTO memory.namespaces (level, slug, purpose) VALUES ('city', $1, 'company') RETURNING id", [`an2b-${run}`])).rows[0].id;
+    const human = async (slug: string) => (await superPool.query<{ id: string }>(
+      "INSERT INTO memory.actors (kind, slug, display_name) VALUES ('human', $1, $1) RETURNING id", [slug])).rows[0].id;
+    const confirmer = await human(`confirmer-${run}`);
+    await human(`stranger-${run}`);
+    await superPool.query("INSERT INTO memory.oauth_members (email, namespace_id, actor_id) VALUES ($1, $2, $3)",
+      [`confirmer-${run}@an2b.test`, company, confirmer]);
+    const out: string[] = [];
+    const io = { out: (l: string) => out.push(l), err: () => undefined };
+    const open = () => new AdminClient(new pg.Pool({ connectionString: urlAs(opsRole, "ops-test-only") }), pepper);
+    assert.equal(await runAdmin(["confirmer", "assign", `confirmer-${run}`, "--scope", city, "--expires-in", "90d"], open, io), 0);
+    const role = out.at(-1)!.split(/\s+/)[0];
+    assert.match(out.at(-1)!, /once they accept it with their own sign-in/);
+    await refused(admin.assignConfirmer({ actor: `stranger-${run}`, scope: city, expiresInMs: 86_400_000 }), /belongs to AN2B/);
+    await refused(admin.assignConfirmer({ actor: `confirmer-${run}`, scope: city, expiresInMs: 400 * 86_400_000 }), /within a year/);
+    const listed = (await admin.listConfirmers()).find((r) => r.id === role)!;
+    assert.deepEqual([listed.holder, listed.scope, listed.state, listed.valid], [`confirmer-${run}`, city, "waiting", false]);
+
+    const ns = (await superPool.query<{ id: string }>("SELECT id FROM memory.namespaces WHERE path = $1", [cell])).rows[0].id;
+    const owner = await human(`cellowner-${run}`);
+    const authority = (await superPool.query<{ id: string }>(
+      "INSERT INTO memory.approval_authorities (actor_id, namespace_id, scope) VALUES ($1, $2, 'cell_knowledge') RETURNING id",
+      [owner, ns])).rows[0].id;
+    const req = (await superPool.query<{ id: string }>(
+      `INSERT INTO memory.cell_erasure_requests (namespace_id, reason, initiated_by_actor_id, authority_id, initiate_sign_in_hash,
+         preview, expires_at)
+       VALUES ($1, 'owner_request', $2, $3, $4, '{"memories": 4, "entities": 1}', now() + interval '7 days') RETURNING id`,
+      [ns, owner, authority, randomBytes(32)])).rows[0].id;
+    const k = await admin.mintKey({ namespace: cell, actor: `claude-${run}` });
+    await assert.rejects(store.remember(k.key, { content: `frozen ${run}` }), /whole-cell erasure/);
+    assert.equal(await runAdmin(["cell-erasure", "list", "--namespace", city], open, io), 0);
+    assert.ok(out.some((l) => l.includes(req) && l.includes("4 memories") && l.includes("the cell is frozen")));
+    await refused(admin.cancelCellErasure(req, "Not A Code"), /short code/);
+    assert.equal(await runAdmin(["cell-erasure", "cancel", req, "--reason", "started_by_mistake"], open, io), 0);
+    assert.match(out.at(-1)!, /takes writes again/);
+    await refused(admin.cancelCellErasure(req, "again"), /not open/);
+    assert.ok(await store.remember(k.key, { content: `thawed ${run}` }));
+
+    assert.equal(await runAdmin(["confirmer", "revoke", role, "--reason", "left_an2b"], open, io), 0);
+    assert.equal((await admin.listConfirmers()).some((r) => r.id === role), false, "ended roles are hidden");
+    const ended = (await admin.listConfirmers({ includeEnded: true })).find((r) => r.id === role)!;
+    assert.deepEqual([ended.state, ended.revoke_reason], ["revoked", "left_an2b"]);
+    const ops = new pg.Client({ connectionString: urlAs(opsRole, "ops-test-only") });
+    await ops.connect();
+    try {
+      await ops.query("SET ROLE engramport_admin");
+      await assert.rejects(ops.query("UPDATE memory.cell_erasure_confirmers SET accepted_at = now() WHERE id = $1", [role]));
+      await assert.rejects(ops.query(
+        "SELECT memory.request_cell_erasure(gen_random_uuid(), gen_random_uuid(), $1, 'owner_request')", [ns]),
+        /permission denied/);
+      await assert.rejects(ops.query("SELECT objects_sha256 FROM memory.cell_erasure_challenges"), /permission denied/);
+    } finally {
+      await ops.end();
+    }
+  });
+
   test("the admin sees delegated grants and can revoke one, and nothing more", async () => {
     const ns = (await superPool.query<{ id: string }>("SELECT id FROM memory.namespaces WHERE path = $1", [cell])).rows[0].id;
     const human = async (slug: string) => (await superPool.query<{ id: string }>(

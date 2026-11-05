@@ -141,6 +141,9 @@ describe("never-store policy on every write path", { skip: ADMIN_URL ? false : "
       memory_id: m.id,
       relations: [{ source: { name: "a co", type: "org" }, predicate: "pays", target: { name: "b co", type: "org" }, evidence: `key ${secret}` }],
     }, /relations\[0\]\.evidence looks like a secret/);
+    await refused("link", {
+      relations: [{ source: { name: "a co", type: "org" }, predicate: secret, target: { name: "b co", type: "org" } }],
+    }, /relations\[0\]\.predicate looks like a secret/);
   });
 
   test("extraction is held to the same rules", async () => {

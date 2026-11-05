@@ -166,10 +166,14 @@ export function checkLinkInput(input: LinkInput): Required<Omit<LinkInput, "memo
   const text: Array<[string, unknown]> = [];
   entities.forEach((e, i) => {
     text.push([`entities[${i}].name`, e.name], [`entities[${i}].description`, e.description]);
+    text.push([`entities[${i}].type`, e.type]);
     e.aliases.forEach((a, j) => text.push([`entities[${i}].aliases[${j}]`, a]));
   });
   relations.forEach((r, i) => {
-    text.push([`relations[${i}].evidence`, r.evidence]);
+    // Predicates and types are lower-case names, which a token can still be.
+    text.push([`relations[${i}].predicate`, r.predicate], [`relations[${i}].evidence`, r.evidence]);
+    if ("type" in r.source) text.push([`relations[${i}].source.type`, r.source.type]);
+    if ("type" in r.target) text.push([`relations[${i}].target.type`, r.target.type]);
     if ("name" in r.source) text.push([`relations[${i}].source.name`, r.source.name]);
     if ("name" in r.target) text.push([`relations[${i}].target.name`, r.target.name]);
   });

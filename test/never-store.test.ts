@@ -44,6 +44,9 @@ const SAMPLES = {
   token_link: [
     "See https://drive.example.com/file/d/abc?token=deadbeef",
     "https://bucket.s3.amazonaws.com/a.pdf?X-Amz-Signature=abc&X-Amz-Credential=def",
+    "Report at https://example.com/report(2026).pdf?token=opaque-value",
+    `Long link https://example.com/${rep("a", 5000)}?sig=abc`,
+    "Broken https://exa mple.com is not one link but https://[bad?token=abc is checked anyway",
     "Signed in at https://app.example.com/callback#access_token=abc",
   ],
   contact_detail: [

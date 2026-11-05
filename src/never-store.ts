@@ -112,7 +112,14 @@ export function linkCarriesToken(raw: string): boolean {
   try {
     url = new URL(raw);
   } catch {
-    return false;
+    // Not parseable as a whole: read its parameter names by hand, so a broken
+    // link is never a way past the check.
+    const q = raw.search(/[?#]/);
+    if (q < 0) return false;
+    return raw.slice(q + 1).split(/[&#;]/).some((pair) => {
+      const name = pair.split("=")[0];
+      return TOKEN_PARAMS.has(name.toLowerCase()) || /^(?:access_token|id_token)$/i.test(name);
+    });
   }
   if (url.password || url.username) return true;
   for (const name of url.searchParams.keys()) {
@@ -123,7 +130,9 @@ export function linkCarriesToken(raw: string): boolean {
   return false;
 }
 
-const URL_IN_TEXT = /\bhttps?:\/\/[^\s<>"'`)\]]{1,2048}/gi;
+// The whole link up to whitespace or a quote, brackets included, with no
+// length cutoff, so a token later in a long link is still seen.
+const URL_IN_TEXT = /\bhttps?:\/\/[^\s<>"'`]+/gi;
 const EMAIL = /^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}$/;
 const PHONE = /(?:\+?1[\s.-]{0,2})?(?:\(\s{0,2}[2-9]\d{2}\s{0,2}\)\s{0,2}|\b[2-9]\d{2}[\s.-]{1,2})[2-9]\d{2}[\s.-]{1,2}\d{4}\b/;
 const SSN = /\b\d{3}-\d{2}-\d{4}\b/;

@@ -69,6 +69,30 @@ export const NEVER_STORE_RULES =
 // Every pattern here is linear: bounded quantifiers, no nested repetition, so a
 // long input can't make a check slow.
 
+/** A run of token characters, dots included, so a JWT is always inside one run. */
+const TOKEN_RUN = /[A-Za-z0-9_.-]+/g;
+
+/**
+ * A JWT: eyJ<8+>.eyJ<8+>.<8+>. Read in one pass over each run, split at the
+ * dots, so input like "eyJ-eyJ-eyJ-..." can't make the check quadratic the way
+ * a backtracking pattern would.
+ */
+function hasJwt(text: string): boolean {
+  if (!text.includes("eyJ")) return false;
+  for (const m of text.matchAll(TOKEN_RUN)) {
+    const run = m[0];
+    if (run.length < 33 || !run.includes("eyJ")) continue;
+    const parts = run.split(".");
+    for (let i = 0; i + 2 < parts.length; i++) {
+      const at = parts[i].indexOf("eyJ");
+      if (at >= 0 && parts[i].length - at >= 11 && parts[i + 1].startsWith("eyJ") && parts[i + 1].length >= 11 && parts[i + 2].length >= 8) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 const SECRET_PATTERNS: RegExp[] = [
   /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----/, // PEM and armored PGP
   /\bep_live_[A-Za-z0-9]{8,}/, // EngramPort's own keys
@@ -87,7 +111,6 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bya29\.[A-Za-z0-9_-]{20,}/, // Google access tokens
   /\bsb_secret_[A-Za-z0-9_-]{16,}/, // Supabase secret keys
   /\bnpm_[A-Za-z0-9]{30,}/,
-  /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/, // JWTs
   /\bbearer\s{1,3}[A-Za-z0-9._~+/-]{20,}/i,
   // A URL with a password in it: scheme://user:password@host
   // (the user name may be empty, as in redis://:password@host)
@@ -304,6 +327,7 @@ function trimEnds(s: string, junk: (ch: string) => boolean): string {
 
 export function scanText(text: string): NeverStoreRule | null {
   for (const p of SECRET_PATTERNS) if (p.test(text)) return "secret";
+  if (hasJwt(text)) return "secret";
   for (const m of text.matchAll(URL_IN_TEXT)) {
     let end = m[0].length;
     while (end > 0 && TRAILING_PUNCTUATION.has(m[0][end - 1])) end -= 1;

@@ -237,6 +237,9 @@ test("long hostile inputs are checked quickly", () => {
     `${rep("x", 19990)}@example.com`,
     `https://example.com/${rep("!", 2000)}x`,
     rep("!", 300) + "@" + rep("!", 19),
+    rep("eyJ-", 16000),
+    rep("eyJa.", 13000),
+    rep("a@b.c:", 11000),
   ];
   for (const s of inputs) {
     const t = performance.now();

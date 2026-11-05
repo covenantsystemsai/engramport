@@ -88,6 +88,9 @@ async function hostedAuth() {
   const restore = config.restorePage
     ? (await import("./restore.js")).createRestoreRouter({ publicUrl: config.publicUrl, pepper, db: sharedPool(), identity })
     : undefined;
+  const cellErasure = config.cellErasurePage
+    ? (await import("./cell-erase.js")).createCellErasureRouter({ publicUrl: config.publicUrl, pepper, db: sharedPool(), identity })
+    : undefined;
   return {
     authenticate,
     resourceMetadataUrl: resourceMetadataUrl(config.publicUrl),
@@ -102,6 +105,7 @@ async function hostedAuth() {
     ...(erase ? { erase } : {}),
     ...(exportPage ? { exportPage } : {}),
     ...(restore ? { restore } : {}),
+    ...(cellErasure ? { cellErasure } : {}),
   };
 }
 

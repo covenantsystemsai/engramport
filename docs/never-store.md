@@ -263,9 +263,9 @@ theirs.
 - Tool inputs are processed as described under "Temporary processing", and
   stored only if they pass this policy.
 - Tool answers never echo a secret back.
-- Every tool that writes is a write path: `remember`, `upload`, `link`, and
-  the tools that revise, supersede or propose. Enforcement covers all of them,
-  not just the first three.
+- Every tool that writes is a write path: `remember`, `upload`, `link` and
+  `supersede_memory` (which also carries revision proposals), and any tool
+  that writes later. Enforcement covers all of them.
 
 ### AWS Secrets Manager
 
@@ -323,11 +323,18 @@ does not claim more.
 3. If it was a secret, rotate the secret. Erasing it doesn't undo the leak.
 4. The backup caveat above still applies.
 
-## D-02 is unchanged
+## D-02, D-03 and D-04 are unchanged
 
-Nothing here alters D-02's authority, scope, retention, restore, export,
-grant, tombstone or backup decisions. Where this policy touches the same ground,
-it points to them.
+Nothing here alters:
+
+- D-02's erasure, export, retention, delegation, restore, tombstone or backup
+  decisions;
+- D-03's approval authority: only the people it names approve, agents never do;
+- D-04's supersession: an agent's revision of an approved memory is a proposal
+  that a person approves.
+
+Where this policy touches the same ground, it points to them. Erasing a
+never-store item that slipped in goes through D-02, as above.
 
 ## Known gaps
 

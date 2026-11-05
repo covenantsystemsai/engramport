@@ -144,7 +144,8 @@ export function linkCarriesToken(raw: string): boolean {
 
 // The whole link up to whitespace or a quote, brackets included, with no
 // length cutoff, so a token later in a long link is still seen.
-const URL_IN_TEXT = /\bhttps?:\/\/[^\s<>"'`]+/gi;
+// Any scheme://, not only http(s): wss://, ftp://, postgres:// and the like carry tokens too.
+const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]{1,20}:\/\/[^\s<>"'`]+/gi;
 const EMAIL = /^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}$/;
 const PHONE = /(?:\+?1[\s.-]{0,2})?(?:\(\s{0,2}[2-9]\d{2}\s{0,2}\)\s{0,2}|\b[2-9]\d{2}[\s.-]{1,2})[2-9]\d{2}[\s.-]{1,2}\d{4}\b/;
  // E.164 form of a US number, with no separators: +19195550199
@@ -234,8 +235,10 @@ function looksLikeTranscript(text: string): boolean {
   if (VTT_OR_SRT.test(text)) return true;
   let turns = 0;
   for (const line of text.split("\n")) {
-    if (line.length > 2000) continue;
-    if (TIMESTAMPED_TURN.test(line) || SPEAKER_LABEL.test(line)) {
+    // The patterns are anchored and bounded, so a turn's start is enough,
+    // however long the turn runs.
+    const head = line.slice(0, 256);
+    if (TIMESTAMPED_TURN.test(head) || SPEAKER_LABEL.test(head)) {
       turns += 1;
       if (turns >= TRANSCRIPT_TURNS) return true;
     }

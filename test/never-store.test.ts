@@ -53,6 +53,8 @@ const SAMPLES = {
     `Posts to https://hooks.${"slack"}.com/services/T0${"0".repeat(8)}/B0${"0".repeat(8)}/${"x".repeat(24)}.`,
   ],
   token_link: [
+    "Connect to wss://example.com/socket?token=opaque-value",
+    "ftp://files.example.com/a.zip?sig=abc",
     "See https://drive.example.com/file/d/abc?token=deadbeef",
     "https://bucket.s3.amazonaws.com/a.pdf?X-Amz-Signature=abc&X-Amz-Credential=def",
     "Report at https://example.com/report(2026).pdf?token=opaque-value",
@@ -91,6 +93,7 @@ const SAMPLES = {
     "IBAN: DE89370400440532013000 EUR",
   ],
   transcript: [
+    [1, 2, 3].map((n) => `Speaker ${n}: ${rep("We reviewed the project plan. ", 80)}`).join("\n"),
     "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nHello",
     "1\n00:00:01,000 --> 00:00:04,000\nHello",
     "[00:01] Sam: let's start\n[00:02] Lee: ok\n[00:05] Sam: first item",

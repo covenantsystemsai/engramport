@@ -153,6 +153,13 @@ test("approval page: off by default; when on it needs OAuth for its Google sign-
     /EXPORT_PAGE needs ENGRAMPORT_OAUTH=true/);
   assert.match(configProblems(resolveConfig(env({ ENGRAMPORT_EXPORT_PAGE: "true", ENGRAMPORT_API_URL: "https://api.example.com" })), "http")[0],
     /EXPORT_PAGE needs ENGRAMPORT_STORE=postgres/);
+  // And the grant page.
+  assert.equal(resolveConfig(env({})).grantPage, false);
+  assert.deepEqual(configProblems(pg({ ...on, ENGRAMPORT_GRANT_PAGE: "true" }), "http"), []);
+  assert.match(configProblems(pg({ ...on, ENGRAMPORT_OAUTH: "", ENGRAMPORT_GRANT_PAGE: "true" }), "http").join(" "),
+    /GRANT_PAGE needs ENGRAMPORT_OAUTH=true/);
+  assert.match(configProblems(resolveConfig(env({ ENGRAMPORT_GRANT_PAGE: "true", ENGRAMPORT_API_URL: "https://api.example.com" })), "http")[0],
+    /GRANT_PAGE needs ENGRAMPORT_STORE=postgres/);
   // And the acceptance page.
   assert.equal(resolveConfig(env({})).acceptPage, false);
   assert.deepEqual(configProblems(pg({ ...on, ENGRAMPORT_ACCEPT_PAGE: "true" }), "http"), []);

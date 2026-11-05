@@ -46,6 +46,8 @@ export interface HttpAppOptions {
   cellErasure?: Router;
   /** The acceptance page (createAcceptRouter), served without a key. */
   accept?: Router;
+  /** The grant page (createGrantRouter), served without a key. */
+  grant?: Router;
   /** RFC 9728 metadata URL named in every 401, so clients can start sign-in. */
   resourceMetadataUrl?: string;
   /** Checks a key before any route runs: false means unknown, revoked or expired. */
@@ -103,6 +105,7 @@ export function createHttpApp(opts: HttpAppOptions): express.Express {
   if (opts.restore) app.use(opts.restore);
   if (opts.cellErasure) app.use(opts.cellErasure);
   if (opts.accept) app.use(opts.accept);
+  if (opts.grant) app.use(opts.grant);
 
   const challenge = (error?: string) =>
     [

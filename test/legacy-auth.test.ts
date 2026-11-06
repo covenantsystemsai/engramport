@@ -1,4 +1,6 @@
 import { test } from "node:test";
+import { createServer, type Server } from "node:http";
+import type { Socket } from "node:net";
 import assert from "node:assert/strict";
 import { legacyFetch } from "../src/legacy-auth.ts";
 import { config, resolveConfig } from "../src/config.ts";
@@ -148,4 +150,42 @@ test("all legacy tool operations use the guarded transport", async () => {
     await assert.rejects(runAsCaller({ apiKey: "synthetic-caller-key" }, calls[0]),
       (e: Error) => e.message.includes("403") && !e.message.includes("sensitive"));
   } finally { Object.assign(config, saved); globalThis.fetch = originalFetch; }
+});
+
+test("legacy error responses are closed unread, so connections don't pile up", async () => {
+  const api = await import("../src/eidetic.ts");
+  const saved = { ...config };
+  const originalFetch = globalThis.fetch;
+  const open = new Set<Socket>();
+  const big = "x".repeat(256 * 1024);
+  const server: Server = createServer((_req, res) => {
+    res.writeHead(500, { "Content-Type": "text/plain" });
+    res.end(big);
+  });
+  server.on("connection", (socket: Socket) => {
+    open.add(socket);
+    socket.on("close", () => open.delete(socket));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  // The client is configured for a reviewed https gateway; the test routes each
+  // request to a local plain-HTTP server that answers with a large error body.
+  globalThis.fetch = ((url: string | URL | Request, options?: RequestInit) => {
+    const u = new URL(String(url));
+    return originalFetch(`http://127.0.0.1:${port}${u.pathname}`, options);
+  }) as typeof fetch;
+  try {
+    Object.assign(config, gateway, { apiKey: "" });
+    for (let i = 0; i < 20; i++) {
+      await assert.rejects(runAsCaller({ apiKey: "synthetic-caller-key" }, () => api.recall("synthetic query", "test")),
+        (e: Error) => e.message.includes("500") && !e.message.includes("xxxx"));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.ok(open.size <= 2, `${open.size} connections still open after 20 error responses`);
+  } finally {
+    Object.assign(config, saved);
+    globalThis.fetch = originalFetch;
+    for (const socket of open) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });

@@ -24,7 +24,9 @@ async function request(method: string, path: string, body?: unknown): Promise<un
 
   const res = await legacyFetch(config, url, opts);
   if (!res.ok) {
-    // Backend errors may contain request content or credentials.
+    // Backend errors may contain request content or credentials, so the body is
+    // never read; cancel it so the connection is released, not left open.
+    await res.body?.cancel().catch(() => {});
     throw new Error(`Eidetic API ${res.status}: request refused or failed`);
   }
   return res.json();

@@ -4,8 +4,11 @@
  * Seeds a throwaway namespace tree with test/fixtures/eval-basic.json, then
  * asks its tuned questions, the held-out ones in test/fixtures/eval-heldout.json
  * and the fresh ones in test/fixtures/eval-fresh.json (written after hybrid was
- * tuned, never tuned on) through the same recall an agent uses, and
- * reports recall@1, recall@3, recall@5 and MRR for each retriever:
+ * tuned, never tuned on). It seeds a second, separate tree with
+ * test/fixtures/eval-realty.json, a made-up brokerage's operating knowledge with
+ * its own questions, also never tuned on. Every question goes through the same
+ * recall an agent uses, and the report gives recall@1, recall@3, recall@5 and
+ * MRR for each retriever:
  *
  *   keyword                   full-text only
  *   graph                     entities and relations only
@@ -55,6 +58,7 @@ interface Fixture {
 const basic = JSON.parse(readFileSync("test/fixtures/eval-basic.json", "utf8")) as Fixture;
 const heldout = JSON.parse(readFileSync("test/fixtures/eval-heldout.json", "utf8")) as Pick<Fixture, "questions">;
 const fresh = JSON.parse(readFileSync("test/fixtures/eval-fresh.json", "utf8")) as Pick<Fixture, "questions">;
+const realty = JSON.parse(readFileSync("test/fixtures/eval-realty.json", "utf8")) as Fixture;
 
 /** An embedder that times each call, so query latency can be reported. */
 type Timed = Embedder & { lastMs: number };
@@ -117,25 +121,32 @@ async function main(): Promise<void> {
         [parent, level, slug],
       )
     ).rows[0].id;
-  const city = await ns(`bench-${run}`, "city", null);
-  const tower = await ns("tower", "tower", city);
-  const cell = await ns("cell", "cell", tower);
-  const sibling = await ns("sibling", "cell", tower);
   const actor = (
     await admin.query<{ id: string }>(
       "INSERT INTO memory.actors (kind, slug, display_name) VALUES ('agent', $1, $1) RETURNING id",
       [`bench-${run}`],
     )
   ).rows[0].id;
-  const keys: Record<string, string> = {};
-  for (const [name, nsId] of Object.entries({ city, tower, cell, sibling })) {
-    const k = mintKey();
-    await admin.query(
-      `INSERT INTO memory.api_keys (namespace_id, actor_id, prefix, key_hash, scopes) VALUES ($1, $2, $3, $4, '{read,write}')`,
-      [nsId, actor, k.prefix, hashKey(k.key, pepper)],
-    );
-    keys[name] = k.key;
-  }
+  /** A city with a tower, a cell and a sibling cell, and a key for each. */
+  const tree = async (prefix: string): Promise<Record<string, string>> => {
+    const city = await ns(`${prefix}-${run}`, "city", null);
+    const tower = await ns("tower", "tower", city);
+    const cell = await ns("cell", "cell", tower);
+    const sibling = await ns("sibling", "cell", tower);
+    const keys: Record<string, string> = {};
+    for (const [name, nsId] of Object.entries({ city, tower, cell, sibling })) {
+      const k = mintKey();
+      await admin.query(
+        `INSERT INTO memory.api_keys (namespace_id, actor_id, prefix, key_hash, scopes) VALUES ($1, $2, $3, $4, '{read,write}')`,
+        [nsId, actor, k.prefix, hashKey(k.key, pepper)],
+      );
+      keys[name] = k.key;
+    }
+    return keys;
+  };
+  // Separate trees, so neither fixture's memories can answer the other's questions.
+  const basicKeys = await tree("bench");
+  const realtyKeys = await tree("bench-realty");
   const appUrl = new URL(ADMIN_URL!);
   appUrl.username = "engramport_app";
   appUrl.password = "engramport-bench-only";
@@ -147,28 +158,39 @@ async function main(): Promise<void> {
   const withModel = new PostgresStore(appPool, { pepper, transport: "rest", embedders: [embedder] });
   const noModel = new PostgresStore(appPool, { pepper, transport: "rest" });
 
-  const ids: Record<string, string> = {};
-  for (const m of basic.memories) {
-    const r = await withModel.remember(keys[m.level], { content: m.content, kind: m.kind as never });
-    if (!r.embedded) throw new Error(`memory ${m.key} was not embedded: ${r.warning}`);
-    ids[m.key] = r.id;
-  }
-  for (const e of basic.graph.entities) {
-    for (const memKey of e.mentionedIn) {
-      await withModel.link(keys.cell, { entities: [{ name: e.name, type: e.type }], memoryId: ids[memKey] });
+  /** Writes a fixture's memories and graph through the tools an agent uses. */
+  const seed = async (fixture: Fixture, keys: Record<string, string>): Promise<Record<string, string>> => {
+    const ids: Record<string, string> = {};
+    for (const m of fixture.memories) {
+      const r = await withModel.remember(keys[m.level], { content: m.content, kind: m.kind as never });
+      if (!r.embedded) throw new Error(`memory ${m.key} was not embedded: ${r.warning}`);
+      ids[m.key] = r.id;
     }
-  }
-  const typeOf = new Map(basic.graph.entities.map((e) => [e.name, e.type]));
-  await withModel.link(keys.cell, {
-    relations: basic.graph.relations.map((r) => ({
-      source: { name: r.source, type: typeOf.get(r.source)! },
-      predicate: r.predicate,
-      target: { name: r.target, type: typeOf.get(r.target)! },
-      confidence: r.confidence,
-    })),
-  });
+    for (const e of fixture.graph.entities) {
+      for (const memKey of e.mentionedIn) {
+        await withModel.link(keys.cell, { entities: [{ name: e.name, type: e.type }], memoryId: ids[memKey] });
+      }
+    }
+    const typeOf = new Map(fixture.graph.entities.map((e) => [e.name, e.type]));
+    await withModel.link(keys.cell, {
+      relations: fixture.graph.relations.map((r) => ({
+        source: { name: r.source, type: typeOf.get(r.source)! },
+        predicate: r.predicate,
+        target: { name: r.target, type: typeOf.get(r.target)! },
+        confidence: r.confidence,
+      })),
+    });
+    return ids;
+  };
+  const basicIds = await seed(basic, basicKeys);
+  const realtyIds = await seed(realty, realtyKeys);
 
-  const sets = { tuned: basic.questions, "held-out": heldout.questions, fresh: fresh.questions };
+  const sets: Array<{ name: string; questions: Fixture["questions"]; keys: Record<string, string>; ids: Record<string, string> }> = [
+    { name: "tuned", questions: basic.questions, keys: basicKeys, ids: basicIds },
+    { name: "held-out", questions: heldout.questions, keys: basicKeys, ids: basicIds },
+    { name: "fresh", questions: fresh.questions, keys: basicKeys, ids: basicIds },
+    { name: "realty (synthetic)", questions: realty.questions, keys: realtyKeys, ids: realtyIds },
+  ];
   const retrievers: Array<{ name: string; store: PostgresStore; mode: RecallMode; embeds: boolean }> = [
     { name: "keyword", store: noModel, mode: "keyword", embeds: false },
     { name: "graph", store: noModel, mode: "graph", embeds: false },
@@ -178,10 +200,10 @@ async function main(): Promise<void> {
   ];
 
   const results: Array<Record<string, unknown>> = [];
-  const keyOf = new Map(Object.entries(ids).map(([k, id]) => [id, k]));
+  const keyOf = new Map([...Object.entries(basicIds), ...Object.entries(realtyIds)].map(([k, id]) => [id, k]));
   const firstMisses: Array<Record<string, unknown>> = [];
   const embedMs: number[] = [];
-  for (const [setName, questions] of Object.entries(sets)) {
+  for (const { name: setName, questions, keys, ids } of sets) {
     for (const r of retrievers) {
       let r1 = 0, r3 = 0, r5 = 0, mrr = 0;
       const recallMs: number[] = [];

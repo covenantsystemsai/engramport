@@ -1,0 +1,73 @@
+{
+  "about": "A made-up real-estate brokerage for the retrieval benchmark: the kind of operating knowledge a brokerage's agents would share, written as explicit memories. Every company, tool and process here is invented. Following the never-store policy (docs/never-store.md), it holds no people's names, no addresses, no contact details and no money figures. Questions mix plain paraphrases, partial word overlaps with distractor memories, and graph questions that name a process and expect the memory about the vendor or tool it depends on. Written once and never used to tune a retriever: if a result looks wrong, write a new set rather than change this one.",
+  "memories": [
+    { "key": "launch", "level": "cell", "kind": "principle", "content": "The listing launch checklist covers professional photos, MLS entry and the yard sign before a home goes live." },
+    { "key": "listing_photos", "level": "cell", "kind": "decision", "content": "New listings get professional photos from Brightframe Studio before they go live." },
+    { "key": "drone", "level": "cell", "kind": "fact", "content": "Brightframe Studio also shoots drone video when the listing agent asks for it." },
+    { "key": "mls_deadline", "level": "cell", "kind": "principle", "content": "A new listing is entered in the MLS within one business day of the signed listing agreement." },
+    { "key": "showing_feedback", "level": "cell", "kind": "fact", "content": "Showing feedback is requested from the buyer's agent the morning after each showing." },
+    { "key": "lead_routing", "level": "cell", "kind": "decision", "content": "Website leads go to the next agent on the lead rotation, and the rotation resets every Monday." },
+    { "key": "lead_response", "level": "cell", "kind": "principle", "content": "Every new lead gets a first reply within fifteen minutes during business hours." },
+    { "key": "open_house", "level": "cell", "kind": "fact", "content": "Open houses run on Saturday and Sunday afternoons, with visitor sign-in on the tablet kiosk." },
+    { "key": "closing_docs", "level": "cell", "kind": "principle", "content": "A file is ready for closing review only when the inspection report, the disclosure packet and the appraisal are attached." },
+    { "key": "inspection_vendor", "level": "cell", "kind": "fact", "content": "Home inspections are booked through Keystone Inspections, who send their reports within two days." },
+    { "key": "crm", "level": "cell", "kind": "fact", "content": "Contacts and follow-ups live in Harborline CRM, and every client call is logged there the same day." },
+    { "key": "birthday", "level": "cell", "kind": "note", "content": "Harborline CRM sends a reminder before each past client's birthday so the agent can send a card." },
+    { "key": "price_review", "level": "cell", "kind": "decision", "content": "After twenty-one days on market without an offer, the listing agent gets a pricing review." },
+    { "key": "coordinator", "level": "cell", "kind": "fact", "content": "The transaction coordinator handles every pending sale from signed contract to closing day." },
+    { "key": "deck", "level": "cell", "kind": "note", "content": "The listing presentation deck is in the shared drive under Marketing." },
+    { "key": "fair_housing", "level": "tower", "kind": "principle", "content": "Every agent completes fair housing training once a year." },
+    { "key": "signage", "level": "tower", "kind": "fact", "content": "Yard signs are ordered from Northpoint Signs and go up the day a listing is live." },
+    { "key": "brand", "level": "city", "kind": "principle", "content": "All flyers, postcards and social posts use the brokerage's approved templates." },
+    { "key": "records", "level": "city", "kind": "principle", "content": "Transaction files are kept for seven years after closing." },
+    { "key": "r0", "level": "cell", "kind": "note", "content": "The office copier is serviced every other month." },
+    { "key": "r1", "level": "cell", "kind": "note", "content": "The weekly team meeting is on Tuesday mornings." },
+    { "key": "r2", "level": "cell", "kind": "note", "content": "Agents park in the back lot during open houses so visitors can use the front." },
+    { "key": "r3", "level": "tower", "kind": "fact", "content": "The break room fridge is cleaned out on Friday afternoons." },
+    { "key": "r4", "level": "tower", "kind": "note", "content": "New agents shadow a senior agent at two showings before running their own." },
+    { "key": "r5", "level": "city", "kind": "fact", "content": "The office closes early on the day before a holiday." }
+  ],
+  "graph": {
+    "entities": [
+      { "name": "Listing launch", "type": "process", "mentionedIn": ["launch"] },
+      { "name": "Brightframe Studio", "type": "organization", "mentionedIn": ["listing_photos", "drone"] },
+      { "name": "MLS", "type": "tool", "mentionedIn": ["mls_deadline"] },
+      { "name": "Lead rotation", "type": "process", "mentionedIn": ["lead_routing"] },
+      { "name": "Harborline CRM", "type": "tool", "mentionedIn": ["crm", "birthday"] },
+      { "name": "Closing review", "type": "process", "mentionedIn": ["closing_docs"] },
+      { "name": "Keystone Inspections", "type": "organization", "mentionedIn": ["inspection_vendor"] }
+    ],
+    "relations": [
+      { "source": "Listing launch", "predicate": "depends_on", "target": "Brightframe Studio", "confidence": 1 },
+      { "source": "Listing launch", "predicate": "depends_on", "target": "MLS", "confidence": 1 },
+      { "source": "Lead rotation", "predicate": "runs_in", "target": "Harborline CRM", "confidence": 1 },
+      { "source": "Closing review", "predicate": "depends_on", "target": "Keystone Inspections", "confidence": 0.9 }
+    ]
+  },
+  "questions": [
+    { "question": "Who takes the pictures for a new listing?", "expect": ["listing_photos"] },
+    { "question": "How soon does a listing have to be in the MLS?", "expect": ["mls_deadline"] },
+    { "question": "When do we ask how a showing went?", "expect": ["showing_feedback"] },
+    { "question": "How are leads from the website assigned?", "expect": ["lead_routing"] },
+    { "question": "When does the lead rotation start over?", "expect": ["lead_routing"] },
+    { "question": "How quickly should a new inquiry get an answer?", "expect": ["lead_response"] },
+    { "question": "Which days are open houses held?", "expect": ["open_house"] },
+    { "question": "What has to be in a file before closing review?", "expect": ["closing_docs"] },
+    { "question": "Which company does our home inspections?", "expect": ["inspection_vendor"] },
+    { "question": "How long until an inspection report comes back?", "expect": ["inspection_vendor"] },
+    { "question": "Where do agents log their client calls?", "expect": ["crm"] },
+    { "question": "When should we talk about lowering the asking price?", "expect": ["price_review"] },
+    { "question": "Who looks after a deal once it is under contract?", "expect": ["coordinator"] },
+    { "question": "How often is fair housing training required?", "expect": ["fair_housing"] },
+    { "question": "Who makes our yard signs?", "expect": ["signage"] },
+    { "question": "Can an agent design their own flyer?", "expect": ["brand"] },
+    { "question": "How long do we keep closed transaction files?", "expect": ["records"] },
+    { "question": "Can we get aerial video of a property?", "expect": ["drone"] },
+    { "question": "What needs doing before a home goes live?", "expect": ["launch"] },
+    { "question": "Where is the listing presentation?", "expect": ["deck"] },
+    { "question": "Is there a reminder for past clients' birthdays?", "expect": ["birthday"] },
+    { "question": "Which vendor does the listing launch depend on?", "expect": ["listing_photos"] },
+    { "question": "What does closing review rely on?", "expect": ["inspection_vendor"] },
+    { "question": "Which system does the lead rotation run in?", "expect": ["crm"] }
+  ]
+}

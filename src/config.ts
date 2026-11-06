@@ -140,6 +140,12 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env) {
     mode: (env.ENGRAMPORT_MODE ||
       (process.stdout.isTTY ? "http" : "stdio")) as "stdio" | "http",
 
+    /** Legacy route: direct Cloud Run (default), or an explicitly reviewed API gateway. */
+    legacyAuth: env.ENGRAMPORT_LEGACY_AUTH || "cloud-run",
+
+    /** Canonical receiving Cloud Run service URL; may differ from a custom/tagged API URL. */
+    oidcAudience: (env.ENGRAMPORT_OIDC_AUDIENCE || "").replace(/\/+$/, ""),
+
     // ── Cloud Run OIDC auth (read directly by src/auth.ts; mirrored here) ──
     gcloudAccount: env.GCLOUD_ACCOUNT || "",
     gcloudCmdPath: env.GCLOUD_CMD_PATH || "",
@@ -181,6 +187,20 @@ export function configProblems(cfg: Config, mode: "stdio" | "http" = cfg.mode): 
   } catch {
     problems.push(`ENGRAMPORT_API_URL is not a valid URL: ${cfg.apiUrl}`);
     return problems;
+  }
+  if (url.username || url.password || url.search || url.hash || url.pathname !== "/") {
+    problems.push("ENGRAMPORT_API_URL must be an origin without credentials, path, query or fragment.");
+  }
+  if (cfg.legacyAuth !== "cloud-run" && cfg.legacyAuth !== "gateway") {
+    problems.push("ENGRAMPORT_LEGACY_AUTH must be cloud-run or gateway.");
+  }
+  if (cfg.legacyAuth === "gateway" && (url.protocol !== "https:" || url.hostname.replace(/\.$/, "").endsWith(".run.app") || url.hostname.replace(/\.$/, "") === "run.app")) {
+    problems.push("Gateway mode needs a reviewed https gateway domain, not a direct run.app URL.");
+  }
+  if (cfg.oidcAudience) {
+    const problem = originProblem("ENGRAMPORT_OIDC_AUDIENCE", cfg.oidcAudience, false);
+    if (problem) problems.push(problem);
+    if (cfg.legacyAuth === "gateway") problems.push("ENGRAMPORT_OIDC_AUDIENCE is only used in cloud-run mode.");
   }
   const local = LOCAL_HOSTS.has(url.hostname);
   if (url.protocol !== "https:" && !(local && url.protocol === "http:")) {

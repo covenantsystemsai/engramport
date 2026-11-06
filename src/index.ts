@@ -34,7 +34,11 @@ import { stopOnSignals } from "./shutdown.js";
 // concurrently with prewarm and only exit after the HTTP banner printed.
 if (process.argv[2] === "prewarm") {
   try {
-    const code = await prewarmToken(config.apiUrl);
+    validateConfig(config.mode);
+    if (config.store !== "eidetic" || config.legacyAuth !== "cloud-run") {
+      throw new Error("prewarm is only for direct legacy Cloud Run access.");
+    }
+    const code = await prewarmToken(config.oidcAudience || config.apiUrl);
     process.exit(code);
   } catch (err) {
     process.stderr.write(`prewarm crashed: ${String(err)}\n`);

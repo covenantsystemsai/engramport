@@ -127,6 +127,8 @@ Set `ENGRAMPORT_STORE=postgres` and the server reads and writes the memory schem
 | Variable | Required | What it does |
 |---|---|---|
 | `ENGRAMPORT_STORE` | no | `eidetic` (default) or `postgres`. |
+| `ENGRAMPORT_LEGACY_AUTH` | legacy only | `cloud-run` (default) requires a Google identity token before any backend call; `gateway` explicitly selects a reviewed HTTPS gateway that supplies its own upstream identity. See [legacy access plan](docs/legacy-cloud-run-auth.md). |
+| `ENGRAMPORT_OIDC_AUDIENCE` | legacy direct only | Canonical receiving Cloud Run service URL when different from `ENGRAMPORT_API_URL`. Must match the verified accepted audience. |
 | `ENGRAMPORT_DATABASE_URL` | postgres | Connection URL for the `engramport_app` role. Admin roles are refused, since they skip row security. Leave `sslmode` out: TLS to a remote host is always verified. |
 | `ENGRAMPORT_DATABASE_CA_FILE` | for Supabase | The database's CA certificate file, so TLS can be verified. |
 | `ENGRAMPORT_KEY_PEPPER` | postgres | At least 32 random bytes, base64 or hex, used to hash keys. |

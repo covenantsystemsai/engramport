@@ -6,7 +6,7 @@
  */
 
 import { config } from "./config.js";
-import { getIdToken } from "./auth.js";
+import { legacyFetch } from "./legacy-auth.js";
 import { backendKey } from "./caller.js";
 import { chunkText } from "./chunk.js";
 
@@ -17,22 +17,17 @@ async function request(method: string, path: string, body?: unknown): Promise<un
     "Content-Type": "application/json",
   };
 
-  // Cloud Run gate: add OIDC Bearer when available. Empty token is a fast,
-  // visible 403 from Cloud Run rather than a silent swallow.
-  const idToken = await getIdToken(config.apiUrl);
-  if (idToken) {
-    headers["X-Serverless-Authorization"] = `Bearer ${idToken}`;
-  }
-
   const opts: RequestInit = { method, headers };
   if (body !== undefined) {
     opts.body = JSON.stringify(body);
   }
 
-  const res = await fetch(url, opts);
+  const res = await legacyFetch(config, url, opts);
   if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(`Eidetic API ${res.status}: ${text}`);
+    // Backend errors may contain request content or credentials, so the body is
+    // never read; cancel it so the connection is released, not left open.
+    await res.body?.cancel().catch(() => {});
+    throw new Error(`Eidetic API ${res.status}: request refused or failed`);
   }
   return res.json();
 }

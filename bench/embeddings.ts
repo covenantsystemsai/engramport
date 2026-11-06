@@ -17,7 +17,19 @@
  *   vector (gte-small)        meaning only
  *   hybrid (gte-small)        all three, the default recall
  *
- * plus how long each query took to embed and to recall. The model runs on this
+ * plus how long each query took to embed and to recall.
+ *
+ * After the quality numbers it runs trust checks on the brokerage tree with
+ * the model switched on, and the job fails if any of them fails:
+ *
+ *   cell walls       a sibling cell's key, and a key in another city, ask every
+ *                    brokerage question through every retriever and get none
+ *                    of the memories they may not read
+ *   retraction       a retracted memory stops coming back from every retriever
+ *   supersession     after a memory is superseded, only the new version comes
+ *                    back, and the old one from no retriever
+ *   never-store      hostile writes are refused with embeddings on, and no
+ *                    memory or embedding row is added The model runs on this
  * machine through transformers.js, with the same gte-small weights Supabase
  * publishes, so no text goes to any outside service and no secret is needed;
  * timings are this machine's, not Supabase's Edge Functions'.
@@ -37,7 +49,7 @@ import pg from "pg";
 import { Embedder, GTE_SMALL } from "../src/embeddings.ts";
 import { hashKey, mintKey } from "../src/keys.ts";
 import { recallAtK, reciprocalRank } from "../src/store/eval.ts";
-import { PostgresStore, RecallMode } from "../src/store/postgres.ts";
+import { PostgresStore, RecallMode, StoreError } from "../src/store/postgres.ts";
 
 const ADMIN_URL = process.env.BENCH_DATABASE_URL;
 if (!ADMIN_URL) {
@@ -253,6 +265,96 @@ async function main(): Promise<void> {
       });
     }
   }
+  // Trust checks on the brokerage tree, with the model on. These change the
+  // tree (a retraction, a supersession), so they run after the quality numbers.
+  const trust: Array<{ check: string; pass: boolean; detail: string }> = [];
+  const realtyCellOnly = new Set(realty.memories.filter((m) => m.level === "cell").map((m) => realtyIds[m.key]));
+  const realtyAll = new Set(Object.values(realtyIds));
+  const askAll = async (key: string, question: string) => {
+    const got: string[][] = [];
+    for (const r of retrievers) {
+      embedder.lastMs = Number.NaN;
+      const out = await r.store.recall(key, { query: question, mode: r.mode, topK: K });
+      if (r.embeds) {
+        // As in the quality loop: a failed embedding falls back to keyword or
+        // drops vector from hybrid, and a check must not pass on that.
+        const usedVector = r.mode === "vector" || (out.retrievers ?? []).includes("vector");
+        if (out.mode !== r.mode || !usedVector || out.warnings?.length || Number.isNaN(embedder.lastMs)) {
+          throw new Error(`trust check: ${r.name} did not search by meaning: ${out.warnings ?? out.mode}`);
+        }
+      }
+      got.push(out.results.map((x) => x.id as string));
+    }
+    return got;
+  };
+
+  // Cell walls: a sibling cell reads its tower and city, never its sibling;
+  // another city reads nothing of this one.
+  let siblingLeaks = 0, cityLeaks = 0, asked = 0;
+  for (const q of realty.questions) {
+    for (const got of await askAll(realtyKeys.sibling, q.question)) siblingLeaks += got.filter((id) => realtyCellOnly.has(id)).length;
+    for (const got of await askAll(basicKeys.cell, q.question)) cityLeaks += got.filter((id) => realtyAll.has(id)).length;
+    asked += retrievers.length;
+  }
+  trust.push({ check: "cell walls: sibling cell", pass: siblingLeaks === 0,
+    detail: `${asked} recalls, ${siblingLeaks} results from the other cell` });
+  trust.push({ check: "cell walls: another city", pass: cityLeaks === 0,
+    detail: `${asked} recalls, ${cityLeaks} results from the brokerage city` });
+
+  // Retraction: the memory leaves every retriever at once, graph included.
+  const retracted = realtyIds.inspection_vendor;
+  await withModel.retract(realtyKeys.cell, retracted);
+  let afterRetract = 0, retractAsked = 0;
+  for (const q of realty.questions.filter((x) => x.expect.includes("inspection_vendor"))) {
+    for (const got of await askAll(realtyKeys.cell, q.question)) afterRetract += got.filter((id) => id === retracted).length;
+    retractAsked += retrievers.length;
+  }
+  trust.push({ check: "retraction", pass: afterRetract === 0,
+    detail: `${retractAsked} recalls, retracted memory returned ${afterRetract} times` });
+
+  // Supersession: only the new version answers, by meaning, keyword or graph.
+  const oldId = realtyIds.open_house;
+  const v2 = await withModel.supersede(realtyKeys.cell, {
+    memoryId: oldId,
+    content: "Open houses now run on Sunday afternoons only, with visitor sign-in on the tablet kiosk.",
+    reason: "The schedule changed.",
+  });
+  const newId = (v2 as { id: string }).id;
+  const ohGot = await askAll(realtyKeys.cell, "Which days are open houses held?");
+  const oldSeen = ohGot.filter((got) => got.includes(oldId)).length;
+  // Where each meaning-based retriever ranks the new version (0 = not in the top 5).
+  const newRanks = retrievers.flatMap((r, i) => (r.embeds ? [ohGot[i].indexOf(newId) + 1] : []));
+  trust.push({ check: "supersession", pass: oldSeen === 0 && newRanks.every((n) => n > 0),
+    detail: `old version returned by ${oldSeen} of ${retrievers.length} retrievers; new version ranked ${newRanks.join(" and ")} by vector and hybrid` });
+
+  // Never-store with embeddings on: refused before anything is stored or embedded.
+  const countRows = async () =>
+    (await admin.query<{ n: string }>(
+      "SELECT (SELECT count(*) FROM memory.memories) + (SELECT count(*) FROM memory.memory_embeddings) AS n",
+    )).rows[0].n;
+  const before = await countRows();
+  // Built at run time, so no scanner mistakes the samples for real ones.
+  const d = (n: number) => "4".repeat(n);
+  const hostile = [
+    `Email the seller at buyer.${"example"}@example.com about the walkthrough.`,
+    `Call the listing agent on (919) 555-01${"43"} after the showing.`,
+    `Card ${["4111", "1111", "1111", "1111"].join(" ")} paid the inspection fee.`,
+    `The client's SSN is ${["123", "45", "6789"].join("-")}.`,
+    `password = "${d(4)}-${"secret"}-${d(4)}"`,
+  ];
+  let refused = 0;
+  for (const content of hostile) {
+    try {
+      await withModel.remember(realtyKeys.cell, { content, kind: "note" as never });
+    } catch (err) {
+      if (err instanceof StoreError && err.code === "refused") refused += 1;
+      else throw err;
+    }
+  }
+  const after = await countRows();
+  trust.push({ check: "never-store with embeddings on", pass: refused === hostile.length && after === before,
+    detail: `${refused} of ${hostile.length} refused; memory and embedding rows ${before} before, ${after} after` });
+
   const timing = {
     embedder: process.env.BENCH_EMBEDDER === "fake" ? "fake (plumbing check only)" : `${MODEL_REPO} via transformers.js, fp32`,
     dimension: embedder.dimension,
@@ -274,6 +376,12 @@ async function main(): Promise<void> {
       `| ${r.set} (${r.questions}) | ${r.retriever} | ${pct(r.recall_at_1)} | ${pct(r.recall_at_3)} | ${pct(r.recall_at_5)} | ` +
         `${Number(r.mrr_at_5).toFixed(2)} | ${Number(r.recall_ms_median).toFixed(1)} |`),
     ``,
+    `Trust checks (brokerage tree, model on):`,
+    ``,
+    `| Check | Result | Detail |`,
+    `|---|---|---|`,
+    ...trust.map((t) => `| ${t.check} | ${t.pass ? "pass" : "FAIL"} | ${t.detail} |`),
+    ``,
     `Missed in the top 5 by hybrid (gte-small):`,
     ...results
       .filter((r) => r.retriever === "hybrid (gte-small)")
@@ -281,7 +389,7 @@ async function main(): Promise<void> {
   ];
   const report = lines.join("\n");
   console.log(report);
-  writeFileSync("bench-results.json", JSON.stringify({ timing, results, hybrid_first_misses: firstMisses }, null, 2));
+  writeFileSync("bench-results.json", JSON.stringify({ timing, results, trust, hybrid_first_misses: firstMisses }, null, 2));
   // Why hybrid ranked another memory first, for tuning the blend.
   console.log(`\nHybrid (gte-small) questions whose first result was not the expected memory:`);
   for (const m of firstMisses) console.log(JSON.stringify(m));
@@ -289,6 +397,10 @@ async function main(): Promise<void> {
 
   await appPool.end();
   await admin.end();
+  if (trust.some((t) => !t.pass)) {
+    console.error(`Trust checks failed: ${trust.filter((t) => !t.pass).map((t) => t.check).join(", ")}`);
+    process.exitCode = 1;
+  }
 }
 
 main().catch((err) => {

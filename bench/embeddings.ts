@@ -273,7 +273,16 @@ async function main(): Promise<void> {
   const askAll = async (key: string, question: string) => {
     const got: string[][] = [];
     for (const r of retrievers) {
+      embedder.lastMs = Number.NaN;
       const out = await r.store.recall(key, { query: question, mode: r.mode, topK: K });
+      if (r.embeds) {
+        // As in the quality loop: a failed embedding falls back to keyword or
+        // drops vector from hybrid, and a check must not pass on that.
+        const usedVector = r.mode === "vector" || (out.retrievers ?? []).includes("vector");
+        if (out.mode !== r.mode || !usedVector || out.warnings?.length || Number.isNaN(embedder.lastMs)) {
+          throw new Error(`trust check: ${r.name} did not search by meaning: ${out.warnings ?? out.mode}`);
+        }
+      }
       got.push(out.results.map((x) => x.id as string));
     }
     return got;
